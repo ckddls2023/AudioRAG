@@ -434,4 +434,5 @@ __MACOSX/
 *.ckpt
 *.pth.tar
 *.pth
+*.pt
 

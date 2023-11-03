@@ -37,9 +37,10 @@ def load_json_file(files, blacklist=None):
                     json_data.append(temp_dict)
                     audio_id += 1
             else:
+                # WARN : Suggest to merge all sentence into one using LLM
                 for item in json_obj["data"]:
                     for i in range(1, json_obj["num_captions_per_audio"] + 1):
-                        temp_dict = {"audio": item["audio"], "caption": item[f"caption_{i}"], "id": audio_id,
+                        temp_dict = {"audio": item["audio"], "caption": item["caption"][i], "id": audio_id,
                                      "duration": item["duration"]}
                         json_data.append(temp_dict)
                     audio_id += 1
@@ -67,7 +68,8 @@ class AudioLanguagePretrainDataset(Dataset):
         item = self.json_data[index]
         wav_path = item["audio"]
         # duration = item["duration"]
-        waveform, _ = librosa.load(wav_path, sr=self.sr, mono=True)
+        waveform, sr = librosa.load(wav_path, sr=self.sr, mono=True)
+        # TODO : If we need, we have to resample it
 
         if self.max_length != 0:
             # if audio length is longer than max_length, we randomly crop it to mac length
@@ -77,9 +79,7 @@ class AudioLanguagePretrainDataset(Dataset):
                 waveform = waveform[start: start + self.max_length]
 
         caption = text_preprocess(item["caption"])
-        audio_id = item["id"]
-
-        return torch.tensor(waveform), caption, "", audio_id
+        return torch.tensor(waveform), caption, wav_path
 
 
 def pretrain_dataloader(config,

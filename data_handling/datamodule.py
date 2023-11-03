@@ -102,18 +102,15 @@ class AudioCaptionDataModule:
 def collate_fn(batch):
     wav_list = []
     text_list = []
-    audio_name_list = []
-    audio_idx_list = []
+    audio_paths = []
     max_length = max([i[0].shape[-1] for i in batch])
-    for waveform, text, audio_name, audio_idx in batch:
+    for waveform, text, audio_path in batch:
         if waveform.shape[-1] < max_length:
             pad_length = max_length - waveform.shape[-1]
             waveform = F.pad(waveform, [0, pad_length], "constant", 0.0)
         wav_list.append(waveform)
         text_list.append(text)
-        audio_idx_list.append(audio_idx)
-        audio_name_list.append(audio_name)
+        audio_paths.append(audio_path)
 
     waveforms = torch.stack(wav_list, dim=0)
-    audio_idx = Tensor(audio_idx_list).type(torch.long)
-    return waveforms, text_list, audio_name_list, audio_idx
+    return waveforms, text_list, audio_path
