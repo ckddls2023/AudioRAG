@@ -1,12 +1,15 @@
 exp_name: 'pretrain'
 device: "cuda"
 seed: 20
-json_files: [
+train_jsons: [
   'data/json_files/BBC_Sound_Effects/bbc_final.json',
   'data/json_files/FreeSound/fsd_final.json',
   'data/json_files/SoundBible/sb_final.json',
   "data/json_files/AudioSet_SL/as_final.json",
   #"data/json_files/Clotho/clotho_final.json"
+]
+val_jsons: [
+  "data/json_files/AudioSet/val.json",
 ]
 blacklist: "data/json_files/blacklist/blacklist_exclude_test_ac.json"
 # dataset == 'AudioCaps': sampling_rate = 32000
@@ -25,24 +28,22 @@ audio_args:
 
 data_args:
   dataset: "Clotho"
-  batch_size: 48
-  num_workers: 8
+  batch_size: 8
+  num_workers: 4
 
 model_args:
   name: "CLAP2GPT2"
+  freeze_lm: True
 
 optim_args:
-  lr: 3e-5
-  warmup_steps: 6400
+  lr: 1e-3
   betas: [0.9, 0.999]
   eps: 1e-8
   momentum: 0.9
   gamma: 0.1
-  warmup_epochs: 2
-  step_epochs: 10
   weight_decay: 1e-6
 
 training:
-  epochs: 10
+  warmup_epochs: 1
+  epochs: 5
   clip_grad: 2
-  dropout: 0.2

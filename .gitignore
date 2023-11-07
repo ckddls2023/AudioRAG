@@ -435,4 +435,7 @@ __MACOSX/
 *.pth.tar
 *.pth
 *.pt
-
+*.bin
+wandb/
+tmp/
+pretrained_models/

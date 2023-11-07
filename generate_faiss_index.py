@@ -1,16 +1,14 @@
 # Preprocess Audio file and Compute Embeddings
 # Build retrieval database : Used for retrieving neighbors
 # Build index for similarity search : Train and build a search index for querying neighbors.
-from types import MethodType
+import types
 from tqdm import tqdm
 import argparse
-import torch
 from omegaconf import OmegaConf
 import faiss
-from transformers import AutoProcessor, ClapAudioModel
 import torch
-import laion_clap
 import pandas as pd
+from laion_clap import CLAP_Module
 
 from data_handling.pretrain_dataset import pretrain_dataloader
 
@@ -86,7 +84,7 @@ if __name__ == "__main__":
     # Load DataLoader in order : WavCaps(AudioCaps-SL,FreeSound, BBC SoundEffects, CLOTHO v2.1)
     # Process embeddings and concatenate into one tensor 48M samples can be processed in GPU memory
     dataloader = pretrain_dataloader(config, bucket=False, is_distributed=False, num_tasks=1, global_rank=0)
-    faiss_index, captions_list = generate_faiss_index(config, dataloader)
+    faiss_index, captions_list, wav_paths = generate_faiss_index(config, dataloader)
     print("Faiss index is ready with", faiss_index.ntotal, "vectors.")
     # Save FAISS index DB
     save_path = "faiss_index.bin"

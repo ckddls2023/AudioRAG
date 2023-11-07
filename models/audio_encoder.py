@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 from transformers import PreTrainedModel, PretrainedConfig
 from transformers.modeling_outputs import BaseModelOutput
-from htsat import HTSAT_Swin_Transformer
 from laion_clap import CLAP_Module
+from .htsat import HTSAT_Swin_Transformer
 
 class CLAPEncoderConfig(PretrainedConfig):
     model_type = "audio_encoder"

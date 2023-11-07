@@ -1,0 +1,3 @@
+[submodule "evaluation_tools"]
+	path = evaluation_tools
+	url = https://github.com/audio-captioning/caption-evaluation-tools.git
