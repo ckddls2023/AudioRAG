@@ -87,8 +87,10 @@ class CLAP2LLAMA(nn.Module):
 
     def __init__(self, args=FrozenArgs()):
         super(CLAP2LLAMA, self).__init__()
-        self.encoder_config = CLAPEncoderConfig()
+        self.encoder_config = CLAPEncoderConfig(select_feature="fine_grained_embedding")
         self.prefix_length = 1  # Only use embedding before projection, if fine-grained, re-calculate
+        if self.encoder_config.select_feature=="fine_grained_embedding":
+            self.prefix_length = int((self.encoder_config.sequence_length - self.encoder_config.window_size)/self.encoder_config.step_size + 1)
         self.encoder = CLAPAudioTower(self.encoder_config)
         self.decoder = LlamaForCausalLM.from_pretrained("lmsys/vicuna-7b-v1.5")  # v1.5 : LLAMA2 + VICUNA
         self.tokenizer = LlamaTokenizer.from_pretrained("lmsys/vicuna-7b-v1.5", use_fast=False)
@@ -136,7 +138,6 @@ class CLAP2LLAMA(nn.Module):
 
     def forward_encoder(self, audios):
         outputs = self.encoder(audios).last_hidden_state
-        outputs = outputs / outputs.norm(2, -1).reshape(-1, 1)  # Normalize embedding
         outputs = self.enc_to_dec_proj(outputs)
         return outputs
 
@@ -159,7 +160,7 @@ class CLAP2LLAMA(nn.Module):
         embedding_text = self.get_decoder_embeddings()(input_ids)  # PEFT : model.base_model
         embedding_cat = torch.cat((encoder_outputs, embedding_text), dim=1)
         batch_size, seq_length = input_ids.shape
-        shifted_input_ids = input_ids.new_zeros((batch_size, seq_length + 1))
+        shifted_input_ids = input_ids.new_zeros((batch_size, seq_length + self.prefix_length))
         shifted_input_ids[:, self.prefix_length:] = input_ids.clone()
         shifted_input_ids[:, :self.prefix_length] = -100
         shifted_input_ids.masked_fill(shifted_input_ids == self.tokenizer.pad_token_id, -100)

@@ -92,7 +92,7 @@ def validate(data_loader, model, epoch):
         "cider": cider_score['score'],
         "spider": spider_score,
     }
-    accelerator.log(metrics_all, step=epoch)
+    accelerator.log(metrics_all)
     return metrics_all
 
 
@@ -119,7 +119,6 @@ def main():
         accelerator.print(train_statics)
         if accelerator.is_main_process:
             metrics = validate(val_dataloader, model, epoch)
-            accelerator.print(metrics)
             spiders.append(metrics["spider"])
             if metrics["spider"] >= max(spiders):
                 # Better to use get_peft_model_state_dict, hard coded save. Please hotfix

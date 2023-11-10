@@ -25,7 +25,10 @@ class CLAPEncoderConfig(PretrainedConfig):
         self.spec_augment = spec_augment
         self.audio_args = audio_args
         self.select_feature = select_feature # fine-grained, embedding, projected
+        self.sequence_length = 1024
         self.hidden_size = 768
+        self.window_size = 32 # Fold and Unfold
+        self.step_size = 16
 
 class CLAPAudioTower(PreTrainedModel):
     config_class = CLAPEncoderConfig
@@ -36,16 +39,23 @@ class CLAPAudioTower(PreTrainedModel):
         self.clap = CLAP_Module(enable_fusion=True)  # 615M
         if config.pretrained:
             self.clap.load_ckpt()  # download the default pretrained checkpoint.
-        def get_audio_embedding_patch(self, data, select_feature=self.config.select_feature):
+        def get_audio_embedding_patch(self, data,
+                                      select_feature=self.config.select_feature,
+                                      window_size=self.config.window_size,
+                                      step_size=self.config.step_size):
             device = next(self.parameters()).device
             input_dict = {}
             keys = data[0].keys()
             for k in keys:
                 input_dict[k] = torch.cat([d[k].unsqueeze(0) for d in data], dim=0).to(device)
             audio_embeds = self.encode_audio(input_dict, device=device)
-            # TODO : if use fine-grained embedding, downsample by average window size as 4(max=256), locality exists(paper also reported)
-            # When we want to use like ViT, we unfold and compute mean last dimension
-            return audio_embeds[select_feature]
+            if select_feature == "fine_grained_embedding":
+                embeds = audio_embeds[select_feature] # [B,1024,768]
+                unfolded = embeds.unfold(1, window_size, step_size) # [B,1024/S,768,W]
+                averaged = unfolded.mean(dim=-1) # [B,1024/S,768]
+                return averaged
+            else:
+                return audio_embeds[select_feature]
         self.clap.model.get_audio_embedding = types.MethodType(get_audio_embedding_patch, self.clap.model)
 
     @torch.no_grad()
