@@ -1,7 +1,7 @@
 import faiss
 class RetrievalIndex:
     def __init__(self, n_probe=16, use_gpu=False, index_path=""):
-        self.datastore = faiss.read_index(index_path)
+        self.datastore = faiss.read_index(index_path, faiss.IO_FLAG_MMAP | faiss.IO_FLAG_READ_ONLY)
         self.datastore.nprobe = n_probe
 
         if use_gpu:

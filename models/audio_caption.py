@@ -89,9 +89,6 @@ class CLAP2LLAMA(nn.Module):
     def __init__(self, args=FrozenArgs()):
         super(CLAP2LLAMA, self).__init__()
         self.encoder_config = CLAPEncoderConfig(select_feature="fine_grained_embedding")
-        self.prefix_length = 1  # Only use embedding before projection, if fine-grained, re-calculate
-        if self.encoder_config.select_feature=="fine_grained_embedding":
-            self.prefix_length = int((self.encoder_config.sequence_length - self.encoder_config.window_size)/self.encoder_config.step_size + 1)
         self.encoder = CLAPAudioTower(self.encoder_config)
         self.decoder = LlamaForCausalLM.from_pretrained("lmsys/vicuna-7b-v1.5")  # v1.5 : LLAMA2 + VICUNA
         self.tokenizer = LlamaTokenizer.from_pretrained("lmsys/vicuna-7b-v1.5", use_fast=False)
@@ -101,13 +98,35 @@ class CLAP2LLAMA(nn.Module):
         self.decoder_config = self.decoder.config
         self.args = args
 
-        # Set 2Layer-MLP following LLAVA paper in NUIPS 2023
+        # Set 2Layer-MLP following LLAVA paper in NEUIPS 2023
+        # modules = [
+        #     nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size),
+        #     nn.GELU(),
+        #     nn.Linear(self.decoder_config.hidden_size, self.decoder_config.hidden_size)
+        # ]
+        # self.enc_to_dec_proj = nn.Sequential(*modules)
+
+        # Set Perceiver Resampler following FLAMINGO paper 2021
         modules = [
-            nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size),
-            nn.GELU(),
-            nn.Linear(self.decoder_config.hidden_size, self.decoder_config.hidden_size)
+            PerceiverResampler(
+                dim=self.encoder_config.hidden_size,
+                depth=2,
+                dim_head=64,
+                heads=8,
+                num_latents=64,  # the number of latents to shrink your media sequence to, perceiver style
+                num_media_embeds=1,  # say you have 4 images maximum in your dialogue
+                grad_checkpoint=True
+            ),
+            nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size)
         ]
         self.enc_to_dec_proj = nn.Sequential(*modules)
+
+        self.prefix_length = 1  # Only use embedding before projection, if fine-grained, re-calculate
+        if self.encoder_config.select_feature == "fine_grained_embedding":
+            self.prefix_length = int((self.encoder_config.sequence_length - self.encoder_config.window_size) / self.encoder_config.step_size + 1)
+        if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
+            self.prefix_length = self.enc_to_dec_proj[0].latents.shape[0]  # Reduce tokens up to num_latents
+
         # Freeze all CLAP parameters
         if args.freeze_am:
             for p in self.encoder.parameters():
@@ -141,7 +160,11 @@ class CLAP2LLAMA(nn.Module):
 
     def forward_encoder(self, audios):
         outputs = self.encoder(audios).last_hidden_state
+        if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
+            outputs = outputs.unsqueeze(1) # [B,1,S,H]
         outputs = self.enc_to_dec_proj(outputs)
+        if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
+            outputs = outputs.squeeze(1) # [B,S,H]
         return outputs
 
     def get_dummy_token(self, batch_size: int, device: torch.device) -> torch.Tensor:
