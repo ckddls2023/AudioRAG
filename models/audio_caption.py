@@ -9,6 +9,7 @@ from transformers import GPT2LMHeadModel, GPT2Tokenizer, LlamaForCausalLM, Llama
 from optimum.bettertransformer import BetterTransformer
 from peft import LoraConfig, TaskType, IA3Config, get_peft_model, get_peft_model_state_dict, PeftModel, PeftConfig
 from models.audio_encoder import CLAPAudioTower, CLAPEncoderConfig, HTSATAudioTower, HTSATEncoderConfig
+from models.flamingo_pytorch import PerceiverResampler
 
 
 @dataclass
@@ -135,6 +136,8 @@ class CLAP2LLAMA(nn.Module):
             #     feedforward_modules=["down_proj"],
             # )
             self.decoder = get_peft_model(self.decoder, peft_config)
+        # If prefix length > 64 and GPU memory exceed than we thought
+        self.decoder.gradient_checkpointing_enable()
 
     def forward_encoder(self, audios):
         outputs = self.encoder(audios).last_hidden_state
