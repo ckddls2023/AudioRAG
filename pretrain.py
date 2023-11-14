@@ -17,13 +17,15 @@ from transformers import (
     TrainingArguments,
 )
 from data_handling.pretrain_dataset import pretrain_dataloader
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedDataParallelKwargs
+
 from peft import LoraConfig, TaskType, IA3Config, get_peft_model, get_peft_model_state_dict
 from models.audio_caption import CLAP2LLAMA, FrozenArgs
 import evaluate
 from metrics import SpiceMetric, CocoTokenizer, CiderMetric
 
-accelerator = Accelerator(gradient_accumulation_steps=8, log_with="wandb")
+ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+accelerator = Accelerator(gradient_accumulation_steps=8, log_with="wandb", kwargs_handlers=[ddp_kwargs])
 
 
 def get_config():

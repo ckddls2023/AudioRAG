@@ -11,6 +11,7 @@ from peft import LoraConfig, TaskType, IA3Config, get_peft_model, get_peft_model
 from models.audio_encoder import CLAPAudioTower, CLAPEncoderConfig, HTSATAudioTower, HTSATEncoderConfig
 from models.flamingo_pytorch import PerceiverResampler
 from models.Qformer import *
+from models.LGTM import *
 
 
 @dataclass
@@ -129,31 +130,36 @@ class CLAP2LLAMA(nn.Module):
 
 
         # Set Qformer following BLIP-2, Video-LLAMA
-        enc_to_dec_proj_config = BertConfig.from_pretrained("bert-base-uncased")
-        enc_to_dec_proj_config.num_hidden_layers = 2
-        enc_to_dec_proj_config.encoder_width = self.encoder_config.hidden_size
-        # insert cross-attention layer every other block
-        enc_to_dec_proj_config.add_cross_attention = True
-        enc_to_dec_proj_config.cross_attention_freq = 1
-        enc_to_dec_proj_config.query_length = 64 # number of latents
-        self.enc_to_dec_proj = BertLMHeadModel(config=enc_to_dec_proj_config)
-        self.audio_query_tokens = nn.Parameter(
-            torch.zeros(1, 64, enc_to_dec_proj_config.hidden_size)
-        )
-        self.audio_query_tokens.data.normal_(mean=0.0, std=enc_to_dec_proj_config.initializer_range)
-        self.enc_to_dec_proj.cls = None
-        self.enc_to_dec_proj.bert.embeddings.word_embeddings = None
-        self.enc_to_dec_proj.bert.embeddings.position_embeddings = None
-        for layer in self.enc_to_dec_proj.bert.encoder.layer:
-            layer.output = None
-            layer.intermediate = None
+        # enc_to_dec_proj_config = BertConfig.from_pretrained("bert-base-uncased")
+        # enc_to_dec_proj_config.num_hidden_layers = 2
+        # enc_to_dec_proj_config.encoder_width = self.encoder_config.hidden_size
+        # # insert cross-attention layer every other block
+        # enc_to_dec_proj_config.add_cross_attention = True
+        # enc_to_dec_proj_config.cross_attention_freq = 1
+        # enc_to_dec_proj_config.query_length = 64 # number of latents
+        # self.enc_to_dec_proj = BertLMHeadModel(config=enc_to_dec_proj_config)
+        # self.audio_query_tokens = nn.Parameter(
+        #     torch.zeros(1, 64, enc_to_dec_proj_config.hidden_size)
+        # )
+        # self.audio_query_tokens.data.normal_(mean=0.0, std=enc_to_dec_proj_config.initializer_range)
+        # self.enc_to_dec_proj.cls = None
+        # self.enc_to_dec_proj.bert.embeddings.word_embeddings = None
+        # self.enc_to_dec_proj.bert.embeddings.position_embeddings = None
+        # for layer in self.enc_to_dec_proj.bert.encoder.layer:
+        #     layer.output = None
+        #     layer.intermediate = None
+        # self.decoder_proj = nn.Linear(
+        #     self.encoder_config.hidden_size, self.decoder_config.hidden_size
+        # )
+        # self.audio_position_embedding = nn.Embedding(256, self.encoder_config.hidden_size)
+        # self.prefix_length = 64
+
+        # Ours, token merge with langauge guided selection
+        self.enc_to_dec_proj = LGTM(hidden_size=self.encoder_config.hidden_size, num_latents=64)
         self.decoder_proj = nn.Linear(
             self.encoder_config.hidden_size, self.decoder_config.hidden_size
         )
-        self.audio_position_embedding = nn.Embedding(256, self.encoder_config.hidden_size)
         self.prefix_length = 64
-
-        # Ours, token merge with langauge guided selection
 
 
         # Freeze all CLAP parameters
@@ -187,26 +193,29 @@ class CLAP2LLAMA(nn.Module):
         # If prefix length > 64 and GPU memory exceed than we thought
         self.decoder.gradient_checkpointing_enable()
 
-    def forward_encoder(self, audios):
+    def forward_encoder(self, audios, text=None):
         outputs = self.encoder(audios).last_hidden_state
         # MLP, Perceiver
         # if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
         #     outputs = outputs.unsqueeze(1) # [B,1,S,H]
         # outputs = self.enc_to_dec_proj(outputs)
         # Qformer
-        B, S = outputs.size()[:2]
-        position_ids = torch.arange(S, dtype=torch.long, device=outputs.device)
-        position_ids = position_ids.unsqueeze(0).expand(B, -1)
-        audio_position_embeddings = self.audio_position_embedding(position_ids)
-        outputs = outputs + audio_position_embeddings
-        audio_query_tokens = self.audio_query_tokens.expand(outputs.shape[0], -1, -1)
-        frame_atts = torch.ones(outputs.size()[:-1], dtype=torch.long).to(outputs.device)
-        audio_query_output = self.enc_to_dec_proj.bert(
-            query_embeds=audio_query_tokens,  # [32,768]
-            encoder_hidden_states=outputs,
-            encoder_attention_mask=frame_atts,
-            return_dict=True,
-        )
+        # B, S = outputs.size()[:2]
+        # position_ids = torch.arange(S, dtype=torch.long, device=outputs.device)
+        # position_ids = position_ids.unsqueeze(0).expand(B, -1)
+        # audio_position_embeddings = self.audio_position_embedding(position_ids)
+        # outputs = outputs + audio_position_embeddings
+        # audio_query_tokens = self.audio_query_tokens.expand(outputs.shape[0], -1, -1)
+        # frame_atts = torch.ones(outputs.size()[:-1], dtype=torch.long).to(outputs.device)
+        # audio_query_output = self.enc_to_dec_proj.bert(
+        #     query_embeds=audio_query_tokens,  # [32,768]
+        #     encoder_hidden_states=outputs,
+        #     encoder_attention_mask=frame_atts,
+        #     return_dict=True,
+        # )
+        # outputs = self.decoder_proj(audio_query_output.last_hidden_state)
+        # Ours, Token merge with language guided selection
+        audio_query_output = self.enc_to_dec_proj(outputs, text)
         outputs = self.decoder_proj(audio_query_output.last_hidden_state)
         # if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
         #     outputs = outputs.squeeze(1) # [B,S,H]
@@ -242,7 +251,8 @@ class CLAP2LLAMA(nn.Module):
         return output
 
     def forward(self, audio, text):
-        audio_embeds = self.forward_encoder(audio)
+        # audio_embeds = self.forward_encoder(audio)
+        audio_embeds = self.forward_encoder(audio, text) # Only when needs text..
         if audio_embeds.dim() == 2:  # B, H -> B, 1, H
             audio_embeds = audio_embeds.unsqueeze(1)
         output = self.forward_decoder(text, audio_embeds)
