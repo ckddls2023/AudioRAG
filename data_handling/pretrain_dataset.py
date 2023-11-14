@@ -85,7 +85,8 @@ def pretrain_dataloader(config,
                         bucket_boundaries: tuple = (5, 30, 6),
                         is_distributed: bool = False,
                         num_tasks: int = 0,
-                        global_rank: int = 0):
+                        global_rank: int = 0,
+                        shuffle=True):
     blacklist = None if 'val' in subset else config.blacklist
     batch_size = 8 if 'val' in subset else config.data_args.batch_size
     dataset = AudioLanguagePretrainDataset(config[subset], config["audio_args"], blacklist)
@@ -97,7 +98,7 @@ def pretrain_dataloader(config,
                                           seed=config["seed"])
         return DataLoader(dataset=dataset,
                           batch_sampler=BySequenceBatchSampler(sampler, batch_size=batch_size, drop_last=False),
-                          shuffle=False,
+                          shuffle=shuffle,
                           pin_memory=True,
                           num_workers=config["data_args"]["num_workers"],
                           collate_fn=collate_fn)
@@ -115,7 +116,7 @@ def pretrain_dataloader(config,
         num_workers=config["data_args"]["num_workers"],
         pin_memory=True,
         sampler=sampler,
-        shuffle=True,
+        shuffle=shuffle,
         drop_last=True,
         collate_fn=collate_fn,
     )

@@ -106,8 +106,8 @@ def main():
         init_kwargs={"wandb": {"name": exp_name}}
     )
     model = CLAP2LLAMA(args=FrozenArgs(freeze_lm=True,freeze_am=True))
-    train_dataloader = pretrain_dataloader(config, subset="train_jsons", bucket=False, is_distributed=False,num_tasks=1,global_rank=0)
-    val_dataloader = pretrain_dataloader(config, subset="val_jsons", bucket=False, is_distributed=False, num_tasks=1,global_rank=0)
+    train_dataloader = pretrain_dataloader(config, subset="train_jsons", bucket=False, is_distributed=False,num_tasks=1,global_rank=0,shuffle=True)
+    val_dataloader = pretrain_dataloader(config, subset="val_jsons", bucket=False, is_distributed=False, num_tasks=1,global_rank=0,shuffle=False)
     optimizer = optim.AdamW(model.parameters(), lr=config.optim_args.lr, betas=config.optim_args.betas, eps=config.optim_args.eps, weight_decay=config.optim_args.weight_decay, fused=False)
     warmup_steps = int(len(train_dataloader)*config.training.warmup_epochs/accelerator.gradient_accumulation_steps)
     train_steps = int(len(train_dataloader)*config.training.epochs/accelerator.gradient_accumulation_steps)
