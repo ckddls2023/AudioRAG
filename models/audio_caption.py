@@ -153,6 +153,8 @@ class CLAP2LLAMA(nn.Module):
         self.audio_position_embedding = nn.Embedding(256, self.encoder_config.hidden_size)
         self.prefix_length = 64
 
+        # Ours, token merge with langauge guided selection
+
 
         # Freeze all CLAP parameters
         if args.freeze_am:
