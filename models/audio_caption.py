@@ -10,6 +10,7 @@ from optimum.bettertransformer import BetterTransformer
 from peft import LoraConfig, TaskType, IA3Config, get_peft_model, get_peft_model_state_dict, PeftModel, PeftConfig
 from models.audio_encoder import CLAPAudioTower, CLAPEncoderConfig, HTSATAudioTower, HTSATEncoderConfig
 from models.flamingo_pytorch import PerceiverResampler
+from models.Qformer import *
 
 
 @dataclass
@@ -97,6 +98,7 @@ class CLAP2LLAMA(nn.Module):
         # self.tokenizer.padding_side = "right"
         self.decoder_config = self.decoder.config
         self.args = args
+        self.prefix_length = 1  # Only use embedding before projection, if fine-grained, re-calculate
 
         # Set 2Layer-MLP following LLAVA paper in NEUIPS 2023
         # modules = [
@@ -105,27 +107,52 @@ class CLAP2LLAMA(nn.Module):
         #     nn.Linear(self.decoder_config.hidden_size, self.decoder_config.hidden_size)
         # ]
         # self.enc_to_dec_proj = nn.Sequential(*modules)
+        # if self.encoder_config.select_feature == "fine_grained_embedding":
+        #     self.prefix_length = int((self.encoder_config.sequence_length - self.encoder_config.window_size) / self.encoder_config.step_size + 1)
 
         # Set Perceiver Resampler following FLAMINGO paper 2021
-        modules = [
-            PerceiverResampler(
-                dim=self.encoder_config.hidden_size,
-                depth=2,
-                dim_head=64,
-                heads=8,
-                num_latents=64,  # the number of latents to shrink your media sequence to, perceiver style
-                num_media_embeds=1,  # say you have 4 images maximum in your dialogue
-                grad_checkpoint=True
-            ),
-            nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size)
-        ]
-        self.enc_to_dec_proj = nn.Sequential(*modules)
+        # modules = [
+        #     PerceiverResampler(
+        #         dim=self.encoder_config.hidden_size,
+        #         depth=2,
+        #         dim_head=64,
+        #         heads=8,
+        #         num_latents=64,  # the number of latents to shrink your media sequence to, perceiver style
+        #         num_media_embeds=1,  # say you have 4 images maximum in your dialogue
+        #         grad_checkpoint=True
+        #     ),
+        #     nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size)
+        # ]
+        # self.enc_to_dec_proj = nn.Sequential(*modules)
+        # if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
+        #     self.prefix_length = self.enc_to_dec_proj[0].latents.shape[0]  # Reduce tokens up to num_latents
 
-        self.prefix_length = 1  # Only use embedding before projection, if fine-grained, re-calculate
-        if self.encoder_config.select_feature == "fine_grained_embedding":
-            self.prefix_length = int((self.encoder_config.sequence_length - self.encoder_config.window_size) / self.encoder_config.step_size + 1)
-        if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
-            self.prefix_length = self.enc_to_dec_proj[0].latents.shape[0]  # Reduce tokens up to num_latents
+
+        # Set Qformer following BLIP-2, Video-LLAMA
+        enc_to_dec_proj_config = BertConfig.from_pretrained("bert-base-uncased")
+        enc_to_dec_proj_config.num_hidden_layers = 2
+        enc_to_dec_proj_config.encoder_width = self.encoder_config.hidden_size
+        # insert cross-attention layer every other block
+        enc_to_dec_proj_config.add_cross_attention = True
+        enc_to_dec_proj_config.cross_attention_freq = 1
+        enc_to_dec_proj_config.query_length = 64 # number of latents
+        self.enc_to_dec_proj = BertLMHeadModel(config=enc_to_dec_proj_config)
+        self.audio_query_tokens = nn.Parameter(
+            torch.zeros(1, 64, enc_to_dec_proj_config.hidden_size)
+        )
+        self.audio_query_tokens.data.normal_(mean=0.0, std=enc_to_dec_proj_config.initializer_range)
+        self.enc_to_dec_proj.cls = None
+        self.enc_to_dec_proj.bert.embeddings.word_embeddings = None
+        self.enc_to_dec_proj.bert.embeddings.position_embeddings = None
+        for layer in self.enc_to_dec_proj.bert.encoder.layer:
+            layer.output = None
+            layer.intermediate = None
+        self.decoder_proj = nn.Linear(
+            self.encoder_config.hidden_size, self.decoder_config.hidden_size
+        )
+        self.audio_position_embedding = nn.Embedding(256, self.encoder_config.hidden_size)
+        self.prefix_length = 64
+
 
         # Freeze all CLAP parameters
         if args.freeze_am:
@@ -160,12 +187,29 @@ class CLAP2LLAMA(nn.Module):
 
     def forward_encoder(self, audios):
         outputs = self.encoder(audios).last_hidden_state
-        if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
-            outputs = outputs.unsqueeze(1) # [B,1,S,H]
-        outputs = self.enc_to_dec_proj(outputs)
-        if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
-            outputs = outputs.squeeze(1) # [B,S,H]
+        # MLP, Perceiver
+        # if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
+        #     outputs = outputs.unsqueeze(1) # [B,1,S,H]
+        # outputs = self.enc_to_dec_proj(outputs)
+        # Qformer
+        B, S = outputs.size()[:2]
+        position_ids = torch.arange(S, dtype=torch.long, device=outputs.device)
+        position_ids = position_ids.unsqueeze(0).expand(B, -1)
+        audio_position_embeddings = self.audio_position_embedding(position_ids)
+        outputs = outputs + audio_position_embeddings
+        audio_query_tokens = self.audio_query_tokens.expand(outputs.shape[0], -1, -1)
+        frame_atts = torch.ones(outputs.size()[:-1], dtype=torch.long).to(outputs.device)
+        audio_query_output = self.enc_to_dec_proj.bert(
+            query_embeds=audio_query_tokens,  # [32,768]
+            encoder_hidden_states=outputs,
+            encoder_attention_mask=frame_atts,
+            return_dict=True,
+        )
+        outputs = self.decoder_proj(audio_query_output.last_hidden_state)
+        # if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
+        #     outputs = outputs.squeeze(1) # [B,S,H]
         return outputs
+
 
     def get_dummy_token(self, batch_size: int, device: torch.device) -> torch.Tensor:
         return torch.full((batch_size, self.prefix_length), -100, dtype=torch.int64, device=device)
