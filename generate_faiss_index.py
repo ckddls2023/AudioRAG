@@ -30,54 +30,103 @@ def generate_faiss_index(config, dataloader):
     Returns:
     - faiss index
     """
-    # Initialize faiss index
-    embedding_dim = 768
-    nlist = 128 # 32~512, trade-off between search time, nprobe=32~128
-    quantizer = faiss.IndexFlatL2(embedding_dim)
-    index_cpu = faiss.IndexIVFFlat(quantizer, embedding_dim, nlist)
-    # https://github.com/facebookresearch/faiss/wiki/Additive-quantizers
-    # https://www.pinecone.io/learn/series/faiss/composite-indexes/
-    # FlatL2 or IndexFlatIP where all the vectors are stored as without any compression or transformation.
-    # LSH is an approximate nearest neighbor search where each vector is hashed to compact binary code
-    # HNSW(Hierarchical Navigable Small World) neighbor search algorithm that builds a multi-layer graph structure
-    # IVF is a method that partitions the vector space into several Voronoi cell, coarse-grained
-    # PQ : Product Quantization, recall-(speed,memory) trade-off, fine-grained
-    # IndexIVFFlat: vector space is partitioned into a Voronoi cell, nlist=number of centroid, nprobe=N close centroid
-    # IndexIVFPQ: vector space is partitioned, m(embedding dim % m = 0, dim for Q), quantized(nbits)
-    # When use complex faiss index with composition, please use index_factory. e.g) index_factory(d, "IVF256,PQ32x8")
-    # model = ClapAudioModel.from_pretrained("laion/clap-htsat-fused").to(config.device)  # 615M
-    # processor = AutoProcessor.from_pretrained("laion/clap-htsat-fused")
+    # FAISS index
+    # index_types = config.index_types
+    index_types = ["audio", "text", "pair"]
+    
+    # function
+    def make_index(embedding_dim, nlist):
+        quantizer = faiss.IndexFlatL2(embedding_dim)
+        index_cpu = faiss.IndexIVFFlat(quantizer, embedding_dim, nlist)
+        return index_cpu
+
+    # nlist: 32~512, trade-off between search time, nprobe=32~128
+    def create_indices(index_types, text_embedding_dim = 512, audio_embedding_dim = 768, nlist = 128):
+        indices = {}
+        if "pair" in index_types:
+            pair_embedding_dim = text_embedding_dim + audio_embedding_dim
+
+        for index_type in index_types:
+            if index_type == "text":
+                indices["text"] = make_index(text_embedding_dim, nlist)
+            elif index_type == "audio":
+                indices["audio"] = make_index(audio_embedding_dim, nlist)
+            elif index_type == "pair":
+                indices["pair"] = make_index(pair_embedding_dim, nlist)
+            else:
+                raise ValueError(f"Invalid index type: {index_type}")
+
+        return indices
+    
+    selected_indices = create_indices(index_types)
     captions = []
     wav_paths = []
-    audio_embeddings_list = []
-    def get_audio_embedding_patch(self, data):
-        device = next(self.parameters()).device
-        input_dict = {}
-        keys = data[0].keys()
-        for k in keys:
-            input_dict[k] = torch.cat([d[k].unsqueeze(0) for d in data], dim=0).to(device)
-        audio_embeds = self.encode_audio(input_dict, device=device)
-        return audio_embeds["embedding"]
-
+    
+    # model
     clap = CLAP_Module(enable_fusion=True)  # 615M
     clap.load_ckpt()  # download the default pretrained checkpoint.
-    clap.model.get_audio_embedding = types.MethodType(get_audio_embedding_patch, clap.model)
-    # Process each batch from the DataLoader
-    with torch.no_grad():
-        for audio_sample, caption, wav_path in tqdm(dataloader):
-            # inputs = processor(audios=audio_sample, return_tensors="pt").to(config.device)
-            # outputs = model(**inputs)
-            # pooler_output = outputs.pooler_output
-            outputs = clap.get_audio_embedding_from_data(x=audio_sample, use_tensor=True) # B, 768
-            audio_embeddings_list.extend(outputs.cpu().contiguous())
-            captions.extend(caption)
-            wav_paths.extend(wav_path)
+    
+    def process_text_data(data, clap_model):
+        return clap_model.get_text_embedding(x = data, use_tensor = True)
+    def process_audio_data(data, clap_model):
+        return clap_model.get_audio_embedding(x=data, use_tensor=True)
 
-    audio_embeddings = torch.cat(audio_embeddings_list)
-    audio_embeddings = audio_embeddings.numpy().astype('float32')
-    index_cpu.train(audio_embeddings) # Suppose 1M, 5~10ms
-    index_cpu.add(audio_embeddings)
-    return index_cpu, captions, wav_paths
+    modalities = {
+        "text": {"process": process_text_data, "embeddings": [], "data_key": "caption"},
+        "audio": {"process": process_audio_data, "embeddings": [], "data_key": "audio_sample"}
+        # 새로운 모달을 추가할 수 있다.
+    }
+    
+    # index types에 있는 종류를 embedding으로 바꾼다.
+    with torch.no_grad():
+        for batch in tqdm(dataloader): # batch -> audio_sample, caption, wav_path
+            captions.extend(batch["caption"])
+            wav_paths.extend(batch["wav_paths"])
+            
+            for modality, info in modalities.items():
+                if modality in index_types:
+                    data = batch[info["data_key"]]
+                    outputs = info["process"](data, clap)
+                    info["embeddings"].extend(outputs.cpu().contiguous())
+
+    # faiss indices에 저장한다.
+    for modality in index_types:
+        embeddings = torch.cat(modalities[modality]["embeddings"]).numpy().astype('float32')
+        selected_indices[modality].train(embeddings)
+        selected_indices[modality].add(embeddings)
+    
+    # text_embeddings_list = []
+    # def get_audio_embedding_patch(self, data):
+    #     device = next(self.parameters()).device
+    #     input_dict = {}
+    #     keys = data[0].keys()
+    #     for k in keys:
+    #         input_dict[k] = torch.cat([d[k].unsqueeze(0) for d in data], dim=0).to(device)
+    #     audio_embeds = self.encode_audio(input_dict, device=device)
+    #     return audio_embeds["embedding"]
+
+    # captions = []
+    # wav_paths = []
+    # audio_embeddings_list = []
+    
+    # clap.model.get_audio_embedding = types.MethodType(get_audio_embedding_patch, clap.model)
+    # # Process each batch from the DataLoader
+    # with torch.no_grad():
+    #     for audio_sample, caption, wav_path in tqdm(dataloader):
+    #         # inputs = processor(audios=audio_sample, return_tensors="pt").to(config.device)
+    #         # outputs = model(**inputs)
+    #         # pooler_output = outputs.pooler_output
+    #         outputs = clap.get_audio_embedding_from_data(x=audio_sample, use_tensor=True) # B, 768
+    #         audio_embeddings_list.extend(outputs.cpu().contiguous())
+    #         captions.extend(caption)
+    #         wav_paths.extend(wav_path)
+
+    # audio_embeddings = torch.cat(audio_embeddings_list)
+    # audio_embeddings = audio_embeddings.numpy().astype('float32')
+    # index_cpu.train(audio_embeddings) # Suppose 1M, 5~10ms
+    # index_cpu.add(audio_embeddings)
+    
+    return selected_indices, captions, wav_paths
 
 if __name__ == "__main__":
     config = get_config()
