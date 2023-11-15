@@ -28,6 +28,11 @@ def get_config():
     config = OmegaConf.load(args.config)
     return config
 
+def process_text_data(data, clap_model):
+    return clap_model.get_text_embedding(x = data, use_tensor = True)
+def process_audio_data(data, clap_model):
+    return clap_model.get_audio_embedding_from_data(x=data, use_tensor=True) # 768 차원으로 늘리는 방법?
+    
 def generate_faiss_index(config, dataloader):
     """
     Generate faiss index for a PyTorch DataLoader.
@@ -73,11 +78,6 @@ def generate_faiss_index(config, dataloader):
     # model
     clap = CLAP_Module(enable_fusion=True)  # 615M
     clap.load_ckpt()  # download the default pretrained checkpoint.
-    
-    def process_text_data(data, clap_model):
-        return clap_model.get_text_embedding(x = data, use_tensor = True)
-    def process_audio_data(data, clap_model):
-        return clap_model.get_audio_embedding_from_data(x=data, use_tensor=True) # 768 차원으로 늘리는 방법?
 
     modalities = {
         "text": {"process": process_text_data, "embeddings": [], "data_key": "caption"},
@@ -87,15 +87,15 @@ def generate_faiss_index(config, dataloader):
     
     # index types에 있는 종류를 embedding으로 바꾼다.
     # for test with sample
-    from itertools import islice
-    num_batches_to_test = 10
+    # from itertools import islice
+    # num_batches_to_test = 10
     name_map = {
         'audio_sample': 0,
         'caption': 1,
         'wav_path': 2
     }
     with torch.no_grad():
-        for batch in tqdm(islice(dataloader, num_batches_to_test)): # batch -> audio_sample, caption, wav_path
+        for batch in tqdm(dataloader): # batch -> audio_sample, caption, wav_path
             captions.extend(batch[name_map["caption"]])
             wav_paths.append(batch[name_map["wav_path"]])
             
@@ -125,27 +125,8 @@ def generate_faiss_index(config, dataloader):
     #         input_dict[k] = torch.cat([d[k].unsqueeze(0) for d in data], dim=0).to(device)
     #     audio_embeds = self.encode_audio(input_dict, device=device)
     #     return audio_embeds["embedding"]
-
-    # captions = []
-    # wav_paths = []
-    # audio_embeddings_list = []
-    
     # clap.model.get_audio_embedding = types.MethodType(get_audio_embedding_patch, clap.model)
-    # Process each batch from the DataLoader
-    # with torch.no_grad():
-    #     for audio_sample, caption, wav_path in tqdm(islice(dataloader, num_batches_to_test)):
-    #         # inputs = processor(audios=audio_sample, return_tensors="pt").to(config.device)
-    #         # outputs = model(**inputs)
-    #         # pooler_output = outputs.pooler_output
-    #         outputs = clap.get_audio_embedding_from_data(x=audio_sample, use_tensor=True) # B, 768
-    #         audio_embeddings_list.extend(outputs.cpu().contiguous())
-    #         captions.extend(caption)
-    #         wav_paths.extend(wav_path)
-
-    # audio_embeddings = torch.cat(audio_embeddings_list)
-    # audio_embeddings = audio_embeddings.numpy().astype('float32')
-    # index_cpu.train(audio_embeddings) # Suppose 1M, 5~10ms
-    # index_cpu.add(audio_embeddings)
+    
     wav_paths_list = [item for sublist in wav_paths for item in sublist]
     return selected_indices, captions, wav_paths_list # captions N개, wav_paths N개, selected_indices는 index_types에서 선택한 index를 생성할 수 있습니다.
 
@@ -177,5 +158,51 @@ if __name__ == "__main__":
     selected_indices, captions_list, wav_paths = generate_faiss_index(config, dataloader)
     save_index(selected_indices, config.index_args.index_save_path, config.index_args.index_types, captions_list, wav_paths)
 
+    # test
+    
+    # # text_file = ["./examples/yapping-dog.txt"]
+    # text_data = ["a dog is barking at a man walking by", "a dog is barking at a man walking by"]
+    # audio_file = ["./examples/yapping-dog.wav", "./examples/yapping-dog.wav"]
+
+    # clap_model = CLAP_Module(enable_fusion=True)  # 615M
+    # clap_model.load_ckpt()
+
+    # # Extract text embeddings
+    # # Get text embedings from texts, but return torch tensor:
+    # with torch.no_grad():
+    #     text_embed = clap_model.get_text_embedding(text_data, use_tensor=True)
+    #     print(text_embed)
+    #     print(text_embed.shape)
+
+    #     # Extract audio embeddings
+    #     audio_embed = clap_model.get_audio_embedding_from_filelist(x = audio_file, use_tensor=True)
+    #     print(audio_embed[:,-20:])
+    #     print(audio_embed.shape)
+    
+    # import numpy as np
+
+    # def cosine_similarity(tensor1, tensor2):
+    #     # Normalize each tensor to have unit length
+    #     tensor1_normalized = tensor1 / np.linalg.norm(tensor1)
+    #     tensor2_normalized = tensor2 / np.linalg.norm(tensor2)
+        
+    #     # Compute the cosine similarity
+    #     similarity = np.dot(tensor1_normalized, tensor2_normalized)
+    #     return similarity
+
+    # # Compute similarity between audio and text embeddings
+    # similarities = cosine_similarity(audio_embed[0].cpu(), text_embed[0].cpu())
+    # print(similarities)
+    
+    # # D, I = index.search(xq, k)
+    # audio_index = faiss.read_index("./data/index/audio_faiss_index.bin")
+    # text_index = faiss.read_index("./data/index/text_faiss_index.bin")
+    
+    # D, nns = audio_index.search(audio_embed.cpu(), k = 16)
+    # print(nns)
+    # D, nns = text_index.search(audio_embed.cpu(), k = 16)
+    # print(nns)
+    
+    
 
 
