@@ -126,8 +126,17 @@ def main():
                 # Better to use get_peft_model_state_dict, hard coded save. Please hotfix
                 unwrapped_model = accelerator.unwrap_model(model)
                 # unwrapped_model.decoder.save_pretrained("pretrained_models/audio_caption/") # PEFT model
-                torch.save(unwrapped_model.enc_to_dec_proj.state_dict(), "pretrained_models/audio_caption/mm_projector.bin")
+                # # For MLP, Perceiver Resampler
+                torch.save(unwrapped_model.enc_to_dec_proj.state_dict(), "pretrained_models/audio_caption/enc_to_dec_proj.bin")
+                # # # For Q-Former, additionally save
+                # torch.save(unwrapped_model.decoder_proj.state_dict(), "pretrained_models/audio_caption/decoder_proj.bin")
+                # # For Ours, LGTM, seperately save
+                # torch.save(unwrapped_model.enc_to_dec_proj.audio2text_xattn.state_dict(), "pretrained_models/audio_caption/audio2text_xattn.bin")
+                # torch.save(unwrapped_model.enc_to_dec_proj.token_merger.state_dict(), "pretrained_models/audio_caption/token_merger.bin")
+
         accelerator.wait_for_everyone()
+    wandb_tracker = accelerator.get_tracker("wandb")
+    wandb_tracker.log_artifact("pretrained_models/audio_caption/")
     accelerator.end_training()
 
 

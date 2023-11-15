@@ -102,14 +102,14 @@ class CLAP2LLAMA(nn.Module):
         self.prefix_length = 1  # Only use embedding before projection, if fine-grained, re-calculate
 
         # Set 2Layer-MLP following LLAVA paper in NEUIPS 2023
-        # modules = [
-        #     nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size),
-        #     nn.GELU(),
-        #     nn.Linear(self.decoder_config.hidden_size, self.decoder_config.hidden_size)
-        # ]
-        # self.enc_to_dec_proj = nn.Sequential(*modules)
-        # if self.encoder_config.select_feature == "fine_grained_embedding":
-        #     self.prefix_length = int((self.encoder_config.sequence_length - self.encoder_config.window_size) / self.encoder_config.step_size + 1)
+        modules = [
+            nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size),
+            nn.GELU(),
+            nn.Linear(self.decoder_config.hidden_size, self.decoder_config.hidden_size)
+        ]
+        self.enc_to_dec_proj = nn.Sequential(*modules)
+        if self.encoder_config.select_feature == "fine_grained_embedding":
+            self.prefix_length = int((self.encoder_config.sequence_length - self.encoder_config.window_size) / self.encoder_config.step_size + 1)
 
         # Set Perceiver Resampler following FLAMINGO paper 2021
         # modules = [
@@ -137,7 +137,7 @@ class CLAP2LLAMA(nn.Module):
         # enc_to_dec_proj_config.add_cross_attention = True
         # enc_to_dec_proj_config.cross_attention_freq = 1
         # enc_to_dec_proj_config.query_length = 64 # number of latents
-        # self.enc_to_dec_proj = BertLMHeadModel(config=enc_to_dec_proj_config)
+        # self.enc_to_dec_proj = BetterTransformer.transform(BertLMHeadModel(config=enc_to_dec_proj_config))
         # self.audio_query_tokens = nn.Parameter(
         #     torch.zeros(1, 64, enc_to_dec_proj_config.hidden_size)
         # )
@@ -155,11 +155,11 @@ class CLAP2LLAMA(nn.Module):
         # self.prefix_length = 64
 
         # Ours, token merge with langauge guided selection
-        self.enc_to_dec_proj = LGTM(hidden_size=self.encoder_config.hidden_size, num_latents=64)
-        self.decoder_proj = nn.Linear(
-            self.encoder_config.hidden_size, self.decoder_config.hidden_size
-        )
-        self.prefix_length = 64
+        # self.enc_to_dec_proj = LGTM(hidden_size=self.encoder_config.hidden_size, num_latents=64)
+        # self.decoder_proj = nn.Linear(
+        #     self.encoder_config.hidden_size, self.decoder_config.hidden_size
+        # )
+        # self.prefix_length = 64
 
 
         # Freeze all CLAP parameters
@@ -195,10 +195,11 @@ class CLAP2LLAMA(nn.Module):
 
     def forward_encoder(self, audios, text=None):
         outputs = self.encoder(audios).last_hidden_state
-        # MLP, Perceiver
+        # Perceiver
         # if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
         #     outputs = outputs.unsqueeze(1) # [B,1,S,H]
-        # outputs = self.enc_to_dec_proj(outputs)
+        outputs = self.enc_to_dec_proj(outputs)
+
         # Qformer
         # B, S = outputs.size()[:2]
         # position_ids = torch.arange(S, dtype=torch.long, device=outputs.device)
@@ -214,9 +215,12 @@ class CLAP2LLAMA(nn.Module):
         #     return_dict=True,
         # )
         # outputs = self.decoder_proj(audio_query_output.last_hidden_state)
+
         # Ours, Token merge with language guided selection
-        audio_query_output = self.enc_to_dec_proj(outputs, text)
-        outputs = self.decoder_proj(audio_query_output.last_hidden_state)
+        # audio_query_output = self.enc_to_dec_proj(outputs, text)
+        # outputs = self.decoder_proj(audio_query_output.last_hidden_state)
+
+        # Perceiver
         # if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
         #     outputs = outputs.squeeze(1) # [B,S,H]
         return outputs
