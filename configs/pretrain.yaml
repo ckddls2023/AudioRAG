@@ -2,16 +2,16 @@ exp_name: 'pretrain'
 device: "cuda"
 seed: 20
 train_jsons: [
-  'data/json_files/BBC_Sound_Effects/bbc_final.json',
-  'data/json_files/FreeSound/fsd_final.json',
-  'data/json_files/SoundBible/sb_final.json',
-  "data/json_files/AudioSet_SL/as_final.json",
+  '/data1/sungjun/wavcaps/json_files/BBC_Sound_Effects/bbc_final.json',
+  '/data1/sungjun/wavcaps/json_files/FreeSound/fsd_final.json',
+  '/data1/sungjun/wavcaps/json_files/SoundBible/sb_final.json',
+  "/data1/sungjun/wavcaps/json_files/AudioSet_SL/as_final.json",
   #"data/json_files/Clotho/clotho_final.json"
 ]
 val_jsons: [
-  "data/json_files/AudioSet/val.json",
+  "/data1/sungjun/wavcaps/json_files/AudioSet/val.json",
 ]
-blacklist: "data/json_files/blacklist/blacklist_exclude_test_ac.json"
+blacklist: "/data1/sungjun/wavcaps/json_files/blacklist/blacklist_exclude_test_ac.json"
 # dataset == 'AudioCaps': sampling_rate = 32000
 # dataset == 'Clotho': sampling_rate = 44100
 # 48000 for CLAP
@@ -49,5 +49,5 @@ training:
   clip_grad: 2
 
 index_args:
-  save_index: "./data/index"
+  index_save_path: "./data/index"
   index_types: ["audio", "text"]

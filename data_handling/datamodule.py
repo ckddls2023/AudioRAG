@@ -113,4 +113,4 @@ def collate_fn(batch):
         audio_paths.append(audio_path)
 
     waveforms = torch.stack(wav_list, dim=0)
-    return waveforms, text_list, audio_path
+    return waveforms, text_list, audio_paths
