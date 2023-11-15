@@ -31,8 +31,7 @@ def generate_faiss_index(config, dataloader):
     - faiss index
     """
     # FAISS index
-    # index_types = config.index_types
-    index_types = ["audio", "text", "pair"]
+    index_types = config.index_args.index_types
     
     # function
     def make_index(embedding_dim, nlist):
@@ -128,23 +127,32 @@ def generate_faiss_index(config, dataloader):
     
     return selected_indices, captions, wav_paths
 
+def save_index(selected_indices, save_path, index_types, captions_list, wav_paths):
+    for modality in index_types:
+        if modality in selected_indices:
+            index_save_path = f"{save_path}{modality}_faiss_index.bin"
+            print(f"Faiss index for {modality} is ready with {selected_indices[modality].ntotal} vectors.")
+            faiss.write_index(selected_indices[modality], index_save_path)
+            print(f"Faiss index for {modality} saved to {index_save_path}")
+            
+    if captions_list and wav_paths:
+        captions_df = pd.DataFrame({
+            'caption': captions_list,
+            'wav_path': wav_paths
+        })
+        captions_csv_path = "index2_caption_path.csv"
+        captions_df.to_csv(captions_csv_path, index=False)
+        print(f"Captions and wav paths saved to {captions_csv_path}")
+
+    print("Saved all selected indices")
+
 if __name__ == "__main__":
     config = get_config()
     # Load DataLoader in order : WavCaps(AudioCaps-SL,FreeSound, BBC SoundEffects, CLOTHO v2.1)
     # Process embeddings and concatenate into one tensor 48M samples can be processed in GPU memory
     dataloader = pretrain_dataloader(config, bucket=False, is_distributed=False, num_tasks=1, global_rank=0)
-    faiss_index, captions_list, wav_paths = generate_faiss_index(config, dataloader)
-    print("Faiss index is ready with", faiss_index.ntotal, "vectors.")
-    # Save FAISS index DB
-    save_path = "faiss_index.bin"
-    faiss.write_index(faiss_index, save_path)
-    print(f"Faiss index saved to {save_path}")
-    # Save captions to a CSV
-    captions_df = pd.DataFrame({
-        'caption': captions_list,
-        'wav_path': wav_paths
-    })
-    captions_csv_path = "index2_caption_path.csv"
-    captions_df.to_csv(captions_csv_path, index=False)
+    selected_indices, captions_list, wav_paths = generate_faiss_index(config, dataloader)
+    save_index(selected_indices, config.index_args.save_path, config.index_args.index_types, captions_list, wav_paths)
+
 
 

@@ -47,3 +47,7 @@ training:
   warmup_epochs: 1
   epochs: 5
   clip_grad: 2
+
+index_args:
+  save_index: "./data/index"
+  index_types: ["audio", "text"]
