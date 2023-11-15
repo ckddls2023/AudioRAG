@@ -27,8 +27,8 @@ class CLAPEncoderConfig(PretrainedConfig):
         self.select_feature = select_feature # fine-grained, embedding, projected
         self.sequence_length = 1024
         self.hidden_size = 768
-        self.window_size = 4 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
-        self.step_size = 4
+        self.window_size = 32 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
+        self.step_size = 32
 
 class CLAPAudioTower(PreTrainedModel):
     config_class = CLAPEncoderConfig

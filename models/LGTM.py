@@ -54,17 +54,17 @@ class LGTM(nn.Module):
             return_dict=True
         )
         text_embeds = text_encoder_output.last_hidden_state # [B,S,H]
-        attn_mask = torch.ones(text_embeds.size()[:-1], dtype=torch.long).to(audio_embeds.device)
         # Cross Attend to T5, single layer
         output = self.audio2text_xattn.bert(
             query_embeds=audio_embeds,  # [B,S,H]
             encoder_hidden_states=text_embeds,
-            encoder_attention_mask=attn_mask,
+            encoder_attention_mask=attention_mask,
             output_attentions=True,
             return_dict=True,
         )
         attention_scores = output.cross_attentions
         # Token selection using text cross-attention score, get 64 tokens
+        # We can learn score of gumbel relaxation or MoE. But no criteria to learning it since we don't marginalize or weighted sum.
         # TODO : Can we find attention score of CLAP when exists CLS token?
         attention_score = attention_scores[-1] # Get last layer attention
         attention_score = attention_score.mean(dim=1) # [B,S,T]
