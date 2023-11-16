@@ -15,7 +15,7 @@ from data_handling.sampler import BySequenceLengthSampler, BySequenceBatchSample
 from data_handling.text_transform import text_preprocess
 
 
-def load_json_file(files, blacklist=None):
+def load_json_file(files, blacklist=None, train=True):
     json_data = []
     audio_id = 0
     if blacklist is not None:
@@ -39,17 +39,23 @@ def load_json_file(files, blacklist=None):
                     json_data.append(temp_dict)
                     audio_id += 1
             else:
+                # TODO : If it's train, we sample all the collected dataset as one
                 for item in json_obj["data"]: # Suppose only stands for validation (AudioCaps, CLOTHO_v2.1)
-                    json_data.append(item)
+                    if train:
+                        for i in range(item["num_captions_per_audio"]):
+                            temp_dict = {"audio": item["audio"], "caption": item["caption"][i], "id": audio_id, "duration": item["duration"]}
+                            json_data.append(temp_dict)
+                    else:
+                        json_data.append(item)
                     audio_id += 1
     return json_data
 
 
 class AudioLanguagePretrainDataset(Dataset):
 
-    def __init__(self, json_files, audio_config, blacklist=None):
+    def __init__(self, json_files, audio_config, blacklist=None, train=True):
 
-        self.json_data = load_json_file(json_files, blacklist)
+        self.json_data = load_json_file(json_files, blacklist, train)
         self.lengths = [item["duration"] for item in self.json_data]
 
         self.sr = audio_config["sr"]
@@ -89,7 +95,7 @@ def pretrain_dataloader(config,
                         shuffle=True):
     blacklist = None if 'val' in subset else config.blacklist
     batch_size = 8 if 'val' in subset else config.data_args.batch_size
-    dataset = AudioLanguagePretrainDataset(config[subset], config["audio_args"], blacklist)
+    dataset = AudioLanguagePretrainDataset(config[subset], config["audio_args"], blacklist, 'train' in subset)
     if bucket:
         sampler = BySequenceLengthSampler(lengths=dataset.lengths,
                                           bucket_boundaries=bucket_boundaries,

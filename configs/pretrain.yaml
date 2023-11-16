@@ -28,7 +28,7 @@ audio_args:
 
 data_args:
   dataset: "Clotho"
-  batch_size: 16
+  batch_size: 8
   num_workers: 4
 
 model_args:
@@ -47,3 +47,7 @@ training:
   warmup_epochs: 1
   epochs: 5
   clip_grad: 2
+
+index_args:
+  index_save_path: "./data/index"
+  index_types: ["audio", "text"]

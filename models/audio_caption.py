@@ -102,14 +102,14 @@ class CLAP2LLAMA(nn.Module):
         self.prefix_length = 1  # Only use embedding before projection, if fine-grained, re-calculate
 
         # Set 2Layer-MLP following LLAVA paper in NEUIPS 2023
-        modules = [
-            nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size),
-            nn.GELU(),
-            nn.Linear(self.decoder_config.hidden_size, self.decoder_config.hidden_size)
-        ]
-        self.enc_to_dec_proj = nn.Sequential(*modules)
-        if self.encoder_config.select_feature == "fine_grained_embedding":
-            self.prefix_length = int((self.encoder_config.sequence_length - self.encoder_config.window_size) / self.encoder_config.step_size + 1)
+        # modules = [
+        #     nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size),
+        #     nn.GELU(),
+        #     nn.Linear(self.decoder_config.hidden_size, self.decoder_config.hidden_size)
+        # ]
+        # self.enc_to_dec_proj = nn.Sequential(*modules)
+        # if self.encoder_config.select_feature == "fine_grained_embedding":
+        #     self.prefix_length = int((self.encoder_config.sequence_length - self.encoder_config.window_size) / self.encoder_config.step_size + 1)
 
         # Set Perceiver Resampler following FLAMINGO paper 2021
         # modules = [
@@ -155,11 +155,11 @@ class CLAP2LLAMA(nn.Module):
         # self.prefix_length = 64
 
         # Ours, token merge with langauge guided selection
-        # self.enc_to_dec_proj = LGTM(hidden_size=self.encoder_config.hidden_size, num_latents=64)
-        # self.decoder_proj = nn.Linear(
-        #     self.encoder_config.hidden_size, self.decoder_config.hidden_size
-        # )
-        # self.prefix_length = 64
+        self.enc_to_dec_proj = LGTM(hidden_size=self.encoder_config.hidden_size, num_latents=64)
+        self.decoder_proj = nn.Linear(
+            self.encoder_config.hidden_size, self.decoder_config.hidden_size
+        )
+        self.prefix_length = 64
 
 
         # Freeze all CLAP parameters
@@ -198,7 +198,7 @@ class CLAP2LLAMA(nn.Module):
         # Perceiver
         # if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
         #     outputs = outputs.unsqueeze(1) # [B,1,S,H]
-        outputs = self.enc_to_dec_proj(outputs)
+        # outputs = self.enc_to_dec_proj(outputs)
 
         # Qformer
         # B, S = outputs.size()[:2]
@@ -217,8 +217,8 @@ class CLAP2LLAMA(nn.Module):
         # outputs = self.decoder_proj(audio_query_output.last_hidden_state)
 
         # Ours, Token merge with language guided selection
-        # audio_query_output = self.enc_to_dec_proj(outputs, text)
-        # outputs = self.decoder_proj(audio_query_output.last_hidden_state)
+        audio_query_output = self.enc_to_dec_proj(outputs, text)
+        outputs = self.decoder_proj(audio_query_output.last_hidden_state)
 
         # Perceiver
         # if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
@@ -266,7 +266,7 @@ class CLAP2LLAMA(nn.Module):
         r"""Generate audio captions for each audio recording in a batch"""
         # We might can use decoder.generate instead of impl directly
         with torch.no_grad():
-            encoder_outputs = self.forward_encoder(samples)
+            encoder_outputs = self.forward_encoder(samples, prompt)
             if encoder_outputs.dim() == 2:
                 encoder_outputs = encoder_outputs.unsqueeze(1)
             outputs = self.decoder.generate(

@@ -74,7 +74,8 @@ def validate(data_loader, model, epoch):
     for i, batch_data in tqdm(enumerate(data_loader), total=len(data_loader)):
         audios, caption_dict, audio_names = batch_data
         with accelerator.autocast():
-            output = unwrapped_model.generate_caption(samples=audios)
+            captions = [caption[0] for caption in caption_dict] # WARN, for only LGTM before retrieval
+            output = unwrapped_model.generate_caption(samples=audios, prompt=captions)
             gen_captions.extend(output)
         ref_captions.extend(caption_dict)
         file_names_all.extend(audio_names)
@@ -126,17 +127,17 @@ def main():
                 # Better to use get_peft_model_state_dict, hard coded save. Please hotfix
                 unwrapped_model = accelerator.unwrap_model(model)
                 # unwrapped_model.decoder.save_pretrained("pretrained_models/audio_caption/") # PEFT model
-                # # For MLP, Perceiver Resampler
-                torch.save(unwrapped_model.enc_to_dec_proj.state_dict(), "pretrained_models/audio_caption/enc_to_dec_proj.bin")
-                # # # For Q-Former, additionally save
-                # torch.save(unwrapped_model.decoder_proj.state_dict(), "pretrained_models/audio_caption/decoder_proj.bin")
-                # # For Ours, LGTM, seperately save
-                # torch.save(unwrapped_model.enc_to_dec_proj.audio2text_xattn.state_dict(), "pretrained_models/audio_caption/audio2text_xattn.bin")
-                # torch.save(unwrapped_model.enc_to_dec_proj.token_merger.state_dict(), "pretrained_models/audio_caption/token_merger.bin")
+                # # # For MLP, Perceiver Resampler
+                # torch.save(unwrapped_model.enc_to_dec_proj.state_dict(), "pretrained_models/audio_caption/enc_to_dec_proj.bin")
+                # # For Q-Former, additionally save
+                torch.save(unwrapped_model.decoder_proj.state_dict(), "pretrained_models/audio_caption/decoder_proj.bin")
+                # For Ours, LGTM, seperately save
+                torch.save(unwrapped_model.enc_to_dec_proj.audio2text_xattn.state_dict(), "pretrained_models/audio_caption/audio2text_xattn.bin")
+                torch.save(unwrapped_model.enc_to_dec_proj.token_merger.state_dict(), "pretrained_models/audio_caption/token_merger.bin")
 
         accelerator.wait_for_everyone()
-    wandb_tracker = accelerator.get_tracker("wandb")
-    wandb_tracker.log_artifact("pretrained_models/audio_caption/")
+    # wandb_tracker = accelerator.get_tracker("wandb")
+    # wandb_tracker.log_artifact("pretrained_models/audio_caption/")
     accelerator.end_training()
 
 
