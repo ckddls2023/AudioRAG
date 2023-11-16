@@ -13,7 +13,7 @@ def load_caption_wav_mapping(csv_path):
     return df['caption'], df['wav_path']
     
 class RetrievalIndex:
-    def __init__(self, n_probe=16, index_path="./data/index", top_k=3, query_mode="audio2audio", device=None, downcast=""):
+    def __init__(self, n_probe=16, index_path="./data/index", top_k=3,query_mode="audio2audio", device=None):
         
         self.datastore = {
             "audio2text": faiss.read_index(f"{index_path}/text_faiss_index.bin"),
@@ -29,13 +29,6 @@ class RetrievalIndex:
         self.clap.eval()
         self.top_k = top_k
         self.query_mode = query_mode
-        self.device = device
-        dtype_map = {
-            "no" : torch.float,
-            "bf16": torch.bfloat16,
-            "fp16": torch.float16,
-        }
-        self.dtype = dtype_map[downcast]
 
         # 보류
         if device: # use_gpu
@@ -65,7 +58,7 @@ class RetrievalIndex:
             audio_embed = self.clap.get_audio_embedding_from_data(x=samples, use_tensor=True)  # B, 768
             return audio_embed
 
-    def get_nns(self, queries):
+    def get_nns(self, queries, device):
         """
         Retrieves nearest neighbors for given queries from the datastore.
 
@@ -81,7 +74,7 @@ class RetrievalIndex:
         Note:
             The method assumes the datastore, captions, and wav_paths attributes are already set in the class.
         """
-        queries_embed = self.query_embedding(queries).detach().cpu().numpy()
+        queries_embed = self.query_embedding(queries).cpu().numpy()
         D, I = self.datastore[self.query_mode].search(queries_embed, self.top_k) # In torch, it may return LongTensor
         I_transposed = list(map(list, zip(*I))) # B,top_k -> top_k, B
         texts = [self.captions[idx_list].tolist() for idx_list in I_transposed]
@@ -98,7 +91,7 @@ class RetrievalIndex:
                     padded_waveform = F.pad(waveform, [0, pad_length], "constant", 0.0)
                     audio_sample_batch[i] = padded_waveform
             waveforms = torch.stack(audio_sample_batch, dim=0)
-            audio_samples[idx] = waveforms.to(device=self.device, dtype=self.dtype)
+            audio_samples[idx] = waveforms.to(device)
         return D, I, texts, audio_samples
 
 if __name__ == "__main__":
