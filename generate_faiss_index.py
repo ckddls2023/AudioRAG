@@ -13,6 +13,7 @@ import os
 import librosa
 from laion_clap import CLAP_Module
 
+from data_handling.retrieval_dataset import RetrievalIndex
 from data_handling.pretrain_dataset import pretrain_dataloader
 
 
@@ -137,8 +138,7 @@ def generate_faiss_index(config, dataloader):
     # clap.model.get_audio_embedding = types.MethodType(get_audio_embedding_patch, clap.model)
 
     wav_paths_list = [item for sublist in wav_paths for item in sublist]
-    return selected_indices, captions, wav_paths_list  # captions N개, wav_paths N개, selected_indices는 index_types에서 선택한 index를 생성할 수 있습니다.
-
+    return selected_indices, captions, wav_paths_list 
 
 def save_index(selected_indices, save_path, index_types, captions_list, wav_paths):
     for modality in index_types:
@@ -162,12 +162,12 @@ def save_index(selected_indices, save_path, index_types, captions_list, wav_path
 
 
 if __name__ == "__main__":
-    config = get_config()
-    # Load DataLoader in order : WavCaps(AudioCaps-SL,FreeSound, BBC SoundEffects, CLOTHO v2.1)
-    # Process embeddings and concatenate into one tensor 48M samples can be processed in GPU memory
-    dataloader = pretrain_dataloader(config, bucket=False, is_distributed=False, num_tasks=1, global_rank=0)
-    selected_indices, captions_list, wav_paths = generate_faiss_index(config, dataloader)
-    save_index(selected_indices, config.index_args.index_save_path, config.index_args.index_types, captions_list, wav_paths)
+    # config = get_config()
+    # # Load DataLoader in order : WavCaps(AudioCaps-SL,FreeSound, BBC SoundEffects, CLOTHO v2.1)
+    # # Process embeddings and concatenate into one tensor 48M samples can be processed in GPU memory
+    # dataloader = pretrain_dataloader(config, bucket=False, is_distributed=False, num_tasks=1, global_rank=0)
+    # selected_indices, captions_list, wav_paths = generate_faiss_index(config, dataloader)
+    # save_index(selected_indices, config.index_args.index_save_path, config.index_args.index_types, captions_list, wav_paths)
 
     # test
     text_data = ["a dog is barking at a man walking by", "Wind and a man speaking are heard, accompanied by buzzing and ticking."]
@@ -200,7 +200,7 @@ if __name__ == "__main__":
     #     similarity = np.dot(tensor1_normalized, tensor2_normalized)
     #     return similarity
 
-    # # Compute similarity between audio and text embeddings
+    # Compute similarity between audio and text embeddings
     # similarities = cosine_similarity(audio_embed[0].cpu(), text_embed[0].cpu())
     # print(similarities)
     # similarities = cosine_similarity(audio_embed[0].cpu(), audio_embed[0].cpu())
@@ -230,6 +230,7 @@ if __name__ == "__main__":
     # Convert your embeddings to the correct type for FAISS if they are not already numpy arrays
     text_query_embeddings = text_embed.cpu().detach().numpy().astype('float32')
     audio_query_embeddings = audio_embed.cpu().detach().numpy().astype('float32')
+    text_embed
 
     k = 16
     # text2text
@@ -240,3 +241,13 @@ if __name__ == "__main__":
     check_nearest_neighbors(audio_index, audio_query_embeddings, k, captions_list, wav_paths_list)
     # audio2text
     check_nearest_neighbors(text_index, audio_query_embeddings, k, captions_list, wav_paths_list)
+    
+    
+    # test2 for retrievalIndex class
+    index = RetrievalIndex()
+    
+    audio_query_embedding = index.query_embedding(audio_embed)
+    text_query_embedding = index.query_embedding(text_embed)
+    
+    index.get_nns("audio", audio_query_embedding, k = 16, show = True)
+    index.get_nns("text", audio_query_embedding, k = 16, show = True)

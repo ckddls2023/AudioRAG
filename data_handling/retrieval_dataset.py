@@ -54,11 +54,48 @@ class RetrievalIndex:
         return query_embeddings
     
     # modal에 따른 search 함수
-    def get_nns(self, modal, queries, k = 16):
+    def get_nns(self, modal, queries, k = 16, show = False):
         index = {
             "text": self.text_datastore,
             "audio": self.audio_datastore
         }
         
         D, I = index[modal].search(queries, k)
+        
+        if show:
+            for i, neighbors in enumerate(I):
+                print(f"Query {i}:")
+                for neighbor in neighbors:
+                    print(f" - Neighbor id: {neighbor}, Caption: {self.caption_list[neighbor]}, Wav path: {self.wav_path_list[neighbor]}")
+                print(f" - Distances: {D[i]}")
         return D, I
+
+if __name__ == "__main__":
+    text_data = ["a dog is barking at a man walking by", "Wind and a man speaking are heard, accompanied by buzzing and ticking."]
+    audio_file = ["./examples/yapping-dog.wav", "./examples/Yb0RFKhbpFJA.flac"]
+    
+    from laion_clap import CLAP_Module
+    
+    clap_model = CLAP_Module(enable_fusion=True)  # 615M
+    clap_model.load_ckpt()
+
+    import torch
+    clap_model.eval()
+    with torch.no_grad():
+        # text
+        text_embed = clap_model.get_text_embedding(text_data, use_tensor=True)
+        print(text_embed)
+        print(text_embed.shape)
+
+        # audio
+        audio_embed = clap_model.get_audio_embedding_from_filelist(x=audio_file, use_tensor=True)
+        print(audio_embed)
+        print(audio_embed.shape)
+        
+    index = RetrievalIndex()
+    
+    audio_query_embedding = index.query_embedding(audio_embed)
+    text_query_embedding = index.query_embedding(text_embed)
+    
+    index.get_nns("audio", audio_query_embedding, k = 16, show = True)
+    index.get_nns("text", audio_query_embedding, k = 16, show = True)
