@@ -10,6 +10,7 @@ import torch
 import pandas as pd
 import time
 import os
+import librosa
 from laion_clap import CLAP_Module
 
 from data_handling.pretrain_dataset import pretrain_dataloader
@@ -43,7 +44,9 @@ def generate_faiss_index(config, dataloader):
 
     Returns:
     - captions N개, wav_paths N개, selected_indices는 index_types에서 선택한 index를 생성할 수 있습니다.
+    - AudioRAG 폴더에 caption_wav_path.csv(captions, wav_paths)가 저장되고, AudioRAG/data/index 폴더에 audio_faiss_index.bin, text_faiss_index.bin이 저장됩니다.
     """
+    
     # FAISS index
     index_types = config.index_args.index_types
     
@@ -86,7 +89,7 @@ def generate_faiss_index(config, dataloader):
     }
     
     # index types에 있는 종류를 embedding으로 바꾼다.
-    # for test with sample
+    # for test with samples
     # from itertools import islice
     # num_batches_to_test = 10
     name_map = {
@@ -115,7 +118,7 @@ def generate_faiss_index(config, dataloader):
         elapsed_time = time.time() - start_time
         print(f"elapsed time for {modality}_faiss_index: {elapsed_time}")
     
-    # previous code
+    # previous
     # text_embeddings_list = []
     # def get_audio_embedding_patch(self, data):
     #     device = next(self.parameters()).device
@@ -159,26 +162,25 @@ if __name__ == "__main__":
     save_index(selected_indices, config.index_args.index_save_path, config.index_args.index_types, captions_list, wav_paths)
 
     # test
+    text_data = ["a dog is barking at a man walking by", "Wind and a man speaking are heard, accompanied by buzzing and ticking."]
+    audio_file = ["./examples/yapping-dog.wav", "./examples/Yb0RFKhbpFJA.flac"]
+
+    clap_model = CLAP_Module(enable_fusion=True)  # 615M
+    clap_model.load_ckpt()
+
+    clap_model.eval()
+    with torch.no_grad():
+        # text
+        text_embed = clap_model.get_text_embedding(text_data, use_tensor=True)
+        print(text_embed)
+        print(text_embed.shape)
+
+        # audio
+        audio_embed = clap_model.get_audio_embedding_from_filelist(x = audio_file, use_tensor=True)
+        print(audio_embed)
+        print(audio_embed.shape)
     
-    # # text_file = ["./examples/yapping-dog.txt"]
-    # text_data = ["a dog is barking at a man walking by", "a dog is barking at a man walking by"]
-    # audio_file = ["./examples/yapping-dog.wav", "./examples/yapping-dog.wav"]
-
-    # clap_model = CLAP_Module(enable_fusion=True)  # 615M
-    # clap_model.load_ckpt()
-
-    # # Extract text embeddings
-    # # Get text embedings from texts, but return torch tensor:
-    # with torch.no_grad():
-    #     text_embed = clap_model.get_text_embedding(text_data, use_tensor=True)
-    #     print(text_embed)
-    #     print(text_embed.shape)
-
-    #     # Extract audio embeddings
-    #     audio_embed = clap_model.get_audio_embedding_from_filelist(x = audio_file, use_tensor=True)
-    #     print(audio_embed[:,-20:])
-    #     print(audio_embed.shape)
-    
+    # 생략
     # import numpy as np
 
     # def cosine_similarity(tensor1, tensor2):
@@ -193,16 +195,42 @@ if __name__ == "__main__":
     # # Compute similarity between audio and text embeddings
     # similarities = cosine_similarity(audio_embed[0].cpu(), text_embed[0].cpu())
     # print(similarities)
+    # similarities = cosine_similarity(audio_embed[0].cpu(), audio_embed[0].cpu())
+    # print(similarities)
     
-    # # D, I = index.search(xq, k)
-    # audio_index = faiss.read_index("./data/index/audio_faiss_index.bin")
-    # text_index = faiss.read_index("./data/index/text_faiss_index.bin")
-    
-    # D, nns = audio_index.search(audio_embed.cpu(), k = 16)
-    # print(nns)
-    # D, nns = text_index.search(audio_embed.cpu(), k = 16)
-    # print(nns)
-    
+    audio_index = faiss.read_index("./data/index/audio_faiss_index.bin")
+    text_index = faiss.read_index("./data/index/text_faiss_index.bin")
+
+    def load_caption_wav_mapping(csv_path):
+        df = pd.read_csv(csv_path)
+        return df['caption'].tolist(), df['wav_path'].tolist()
+
+    def check_nearest_neighbors(index, queries, k, captions, wav_paths):
+        # Search the index
+        D, I = index.search(queries, k)
+        for i, neighbors in enumerate(I):
+            print(f"Query {i}:")
+            for neighbor in neighbors:
+                print(f" - Neighbor id: {neighbor}, Caption: {captions[neighbor]}, Wav path: {wav_paths[neighbor]}")
+            print(f" - Distances: {D[i]}")
+
+    captions_list, wav_paths_list = load_caption_wav_mapping("caption_wav_path.csv")
+
+    # Convert your embeddings to the correct type for FAISS if they are not already numpy arrays
+    text_query_embeddings = text_embed.cpu().detach().numpy().astype('float32')
+    audio_query_embeddings = audio_embed.cpu().detach().numpy().astype('float32')
+
+    k = 16
+    # text2text
+    check_nearest_neighbors(text_index, text_query_embeddings, k, captions_list, wav_paths_list)
+    # text2audio
+    check_nearest_neighbors(audio_index, text_query_embeddings, k, captions_list, wav_paths_list)
+    # audio2audio
+    check_nearest_neighbors(audio_index, audio_query_embeddings, k, captions_list, wav_paths_list)
+    # audio2text
+    check_nearest_neighbors(text_index, audio_query_embeddings, k, captions_list, wav_paths_list)
+
+        
     
 
 
