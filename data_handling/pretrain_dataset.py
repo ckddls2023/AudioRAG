@@ -24,30 +24,23 @@ def load_json_file(files, blacklist=None, train=True):
     for file in files:
         with open(file, "r") as f:
             json_obj = json.load(f)
-            if json_obj["num_captions_per_audio"] == 1:
-                for item in json_obj["data"]:
-                    if "FreeSound" in file and blacklist is not None:
-                        if item["id"] in blacklist["FreeSound"]:
-                            continue
-                    elif "AudioSet" in file and blacklist is not None:
-                        if item["id"] in blacklist["AudioSet"]:
-                            continue
-                    if item["duration"] > 40.0: # Avoid too much long audios
+            for item in json_obj["data"]:
+                if "FreeSound" in file and blacklist is not None:
+                    if item["id"] in blacklist["FreeSound"]:
                         continue
-                    temp_dict = {"audio": item["audio"], "caption": item["caption"], "id": audio_id,
-                                 "duration": item["duration"]}
-                    json_data.append(temp_dict)
-                    audio_id += 1
-            else:
-                # TODO : If it's train, we sample all the collected dataset as one
-                for item in json_obj["data"]: # Suppose only stands for validation (AudioCaps, CLOTHO_v2.1)
-                    if train:
-                        for i in range(item["num_captions_per_audio"]):
-                            temp_dict = {"audio": item["audio"], "caption": item["caption"][i], "id": audio_id, "duration": item["duration"]}
-                            json_data.append(temp_dict)
-                    else:
-                        json_data.append(item)
-                    audio_id += 1
+                elif "AudioSet" in file and blacklist is not None:
+                    if item["id"] in blacklist["AudioSet"]:
+                        continue
+                if item["duration"] > 40.0: # Avoid too much long audios
+                    continue
+                if train:
+                    for i in range(item["num_captions_per_audio"]):
+                        temp_dict = {"audio": item["audio"], "caption": item["caption"][i], "id": audio_id,
+                                     "duration": item["duration"]}
+                        json_data.append(temp_dict)
+                else:
+                    json_data.append(item)
+                audio_id += 1
     return json_data
 
 

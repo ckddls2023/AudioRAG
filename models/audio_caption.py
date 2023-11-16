@@ -99,7 +99,6 @@ class CLAP2LLAMA(nn.Module):
         # self.tokenizer.padding_side = "right"
         self.decoder_config = self.decoder.config
         self.args = args
-        self.prefix_length = 1  # Only use embedding before projection, if fine-grained, re-calculate
 
         # Set 2Layer-MLP following LLAVA paper in NEUIPS 2023
         # modules = [
@@ -108,8 +107,6 @@ class CLAP2LLAMA(nn.Module):
         #     nn.Linear(self.decoder_config.hidden_size, self.decoder_config.hidden_size)
         # ]
         # self.enc_to_dec_proj = nn.Sequential(*modules)
-        # if self.encoder_config.select_feature == "fine_grained_embedding":
-        #     self.prefix_length = int((self.encoder_config.sequence_length - self.encoder_config.window_size) / self.encoder_config.step_size + 1)
 
         # Set Perceiver Resampler following FLAMINGO paper 2021
         # modules = [
@@ -125,8 +122,6 @@ class CLAP2LLAMA(nn.Module):
         #     nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size)
         # ]
         # self.enc_to_dec_proj = nn.Sequential(*modules)
-        # if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
-        #     self.prefix_length = self.enc_to_dec_proj[0].latents.shape[0]  # Reduce tokens up to num_latents
 
 
         # Set Qformer following BLIP-2, Video-LLAMA
@@ -152,14 +147,15 @@ class CLAP2LLAMA(nn.Module):
         #     self.encoder_config.hidden_size, self.decoder_config.hidden_size
         # )
         # self.audio_position_embedding = nn.Embedding(256, self.encoder_config.hidden_size)
-        # self.prefix_length = 64
 
         # Ours, token merge with langauge guided selection
         self.enc_to_dec_proj = LGTM(hidden_size=self.encoder_config.hidden_size, num_latents=64)
         self.decoder_proj = nn.Linear(
             self.encoder_config.hidden_size, self.decoder_config.hidden_size
         )
-        self.prefix_length = 64
+
+        self.freeze_am = args.freeze_am
+        self.freeze_lm = args.freeze_lm
 
 
         # Freeze all CLAP parameters
@@ -175,13 +171,14 @@ class CLAP2LLAMA(nn.Module):
                 param.requires_grad = False
         else:
             # target_modules = ["k_proj", "q_proj", "up_proj", "down_proj", "o_proj", "gate_proj", "v_proj"] # need ZERO 3..
-            peft_config = LoraConfig(  # Following QLoRA, Recent Model use all target to tune LORA
-                r=16,
+            self.peft_config = LoraConfig(  # Following QLoRA, Recent Model use all target to tune LORA
+                r=8,
                 lora_alpha=16,
                 lora_dropout=0.05,
                 bias="none",
                 task_type=TaskType.CAUSAL_LM,
-                target_modules=["k_proj", "q_proj", "o_proj", "v_proj"]
+                modules_to_save=['lm_head', 'embed_tokens'],
+                target_modules=["q_proj", "v_proj"] # Mini GPT5
             )
             # config = IA3Config(
             #     peft_type="IA3",
@@ -189,8 +186,10 @@ class CLAP2LLAMA(nn.Module):
             #     target_modules=['q_proj', 'k_proj', 'down_proj'],
             #     feedforward_modules=["down_proj"],
             # )
-            self.decoder = get_peft_model(self.decoder, peft_config)
-        # If prefix length > 64 and GPU memory exceed than we thought
+            self.decoder = get_peft_model(self.decoder, self.peft_config)
+            self.decoder.base_model.model.model.embed_tokens.original_module.weight.requires_grad = False
+            self.decoder.base_model.model.lm_head.original_module.weight.requires_grad = False
+            self.decoder.print_trainable_parameters()
         self.decoder.gradient_checkpointing_enable()
 
     def forward_encoder(self, audios, text=None):
@@ -226,51 +225,101 @@ class CLAP2LLAMA(nn.Module):
         return outputs
 
 
-    def get_dummy_token(self, batch_size: int, device: torch.device) -> torch.Tensor:
-        return torch.full((batch_size, self.prefix_length), -100, dtype=torch.int64, device=device)
-
-    def get_dummy_attn_mask(self, batch_size: int, device: torch.device) -> torch.Tensor:
-        return torch.full((batch_size, self.prefix_length), 1, dtype=torch.int64, device=device)
-
     def get_decoder_embeddings(self):
         if self.args.freeze_lm:
             return self.decoder.get_input_embeddings()
         else:
             return self.decoder.base_model.get_input_embeddings()
 
-    def forward_decoder(self, text, encoder_outputs):
-        text = self.tokenizer(text, padding='longest', truncation=True, return_tensors="pt")
-        input_ids = text["input_ids"].to(encoder_outputs.device)
-        attention_mask = text["attention_mask"].to(encoder_outputs.device)  # [B, 768], fine-grained [B,32,768]
-        embedding_text = self.get_decoder_embeddings()(input_ids)  # PEFT : model.base_model
-        embedding_cat = torch.cat((encoder_outputs, embedding_text), dim=1)
+    def shift_and_pad_input(self, input_ids, attn_mask, prefix_length):
         batch_size, seq_length = input_ids.shape
-        shifted_input_ids = input_ids.new_zeros((batch_size, seq_length + self.prefix_length))
-        shifted_input_ids[:, self.prefix_length:] = input_ids.clone()
-        shifted_input_ids[:, :self.prefix_length] = -100
-        shifted_input_ids.masked_fill(shifted_input_ids == self.tokenizer.pad_token_id, -100)
-        dummy_mask = self.get_dummy_attn_mask(input_ids.shape[0], input_ids.device)
-        attention_mask = torch.cat((dummy_mask, attention_mask), dim=1)
-        output = self.decoder(inputs_embeds=embedding_cat, labels=shifted_input_ids, attention_mask=attention_mask)
+        shifted_input_ids = input_ids.new_zeros((batch_size, seq_length + prefix_length))
+        shifted_input_ids[:, prefix_length:] = input_ids.clone()
+        shifted_input_ids[:, :prefix_length] = -100
+        shifted_input_ids.masked_fill_(shifted_input_ids == self.tokenizer.pad_token_id, -100)
+        shifted_attn_mask = attn_mask.new_zeros((batch_size, seq_length + prefix_length))
+        shifted_attn_mask[:, prefix_length:] = attn_mask.clone()
+        shifted_attn_mask[:, :prefix_length] = 1
+        return shifted_input_ids
+
+    def prepare_text_input(self, text, device):
+        tokenized_text = self.tokenizer(text, padding='longest', truncation=True, return_tensors="pt")
+        input_ids = tokenized_text["input_ids"].to(device)
+        attn_mask = tokenized_text["attention_mask"].to(device)
+        return input_ids, attn_mask
+
+    def forward_decoder(self, audio_embed, text, retr_audio_embeds=None, retr_texts=None):
+        input_ids, attn_mask = self.prepare_text_input(text, audio_embed.device)
+        input_embeds = torch.cat((audio_embed, self.get_decoder_embeddings()(input_ids)), dim=1)
+        shifted_input_ids, shifted_attn_mask = self.shift_and_pad_input(input_ids, attn_mask, audio_embed.shape[1])
+        if retr_audio_embeds:
+            for retr_audio_embed, retr_text in zip(retr_audio_embeds, retr_texts):
+                input_ids, attn_mask = self.prepare_text_input(retr_text, audio_embed.device)
+                retr_input_embeds = torch.cat((retr_audio_embed, self.get_decoder_embeddings()(input_ids)), dim=1)
+                shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(input_ids, attn_mask, retr_audio_embed.shape[1])
+                input_embeds = torch.cat((retr_input_embeds, input_embeds), dim=1)
+                shifted_input_ids = torch.cat((shifted_retr_ids, shifted_input_ids), dim=1)
+                shifted_attn_mask = torch.cat((shifted_retr_mask, shifted_attn_mask), dim=1)
+        output = self.decoder(inputs_embeds=input_embeds, labels=shifted_input_ids, attention_mask=shifted_attn_mask)
         return output
 
-    def forward(self, audio, text):
-        # audio_embeds = self.forward_encoder(audio)
-        audio_embeds = self.forward_encoder(audio, text) # Only when needs text..
-        if audio_embeds.dim() == 2:  # B, H -> B, 1, H
-            audio_embeds = audio_embeds.unsqueeze(1)
-        output = self.forward_decoder(text, audio_embeds)
+    def forward(self, audio, text, retr_audios=None, retr_texts=None):
+        audio_embed = self.forward_encoder(audio, text) # Only when needs text..
+        retr_audio_embeds = []
+        if retr_audios is not None:
+            for retr_audio, retr_text in zip(retr_audios, retr_texts):
+                retr_embed = self.forward_encoder(retr_audio, retr_text)
+                retr_audio_embeds.append(retr_embed)
+        output = self.forward_decoder(audio_embed, text, retr_audio_embeds, retr_texts)
         return output
 
-    def generate_caption(self, samples, prompt=None, beam_size: int = 5, entry_length=67, temperature=1.):
+    def save_ckpt(self, checkpoint_path):
+        # MLP, Perceiver Resamplerc
+        # torch.save(unwrapped_model.enc_to_dec_proj.state_dict(), "pretrained_models/audio_caption/enc_to_dec_proj.bin")
+        # For Q-Former, additionally save
+        torch.save(self.decoder_proj.state_dict(), checkpoint_path + "decoder_proj.bin")
+        # For Ours, LGTM, seperately save
+        torch.save(self.enc_to_dec_proj.audio2text_xattn.state_dict(), checkpoint_path+"audio2text_xattn.bin")
+        torch.save(self.enc_to_dec_proj.token_merger.state_dict(), checkpoint_path+"token_merger.bin")
+        if not self.freeze_lm:
+            self.decoder.save_pretrained(checkpoint_path)
+
+    def load_ckpt(self, checkpoint_path):
+        # For MLP
+        # self.enc_to_dec_proj.load_state_dict(torch.load(checkpoint_path+"enc_to_dec_proj.bin"))
+        # For Q-Former, additionally save
+        self.decoder_proj.load_state_dict(torch.load(checkpoint_path + "decoder_proj.bin"))
+        # For Ours, LGTM, seperately save
+        self.enc_to_dec_proj.audio2text_xattn.load_state_dict(torch.load(checkpoint_path+"audio2text_xattn.bin"))
+        self.enc_to_dec_proj.token_merger.load_state_dict(torch.load(checkpoint_path+"token_merger.bin"))
+        if not self.freeze_lm:
+            self.decoder = PeftModel.from_pretrained(self.decoder, checkpoint_path) # suppose don't use get_peft_model
+
+    def generate_caption(self, audio, text=None, retr_audios=None, retr_texts=None, prompt=None):
         r"""Generate audio captions for each audio recording in a batch"""
-        # We might can use decoder.generate instead of impl directly
+        # TODO : Instruction tuning? Or Task identifier?
+        # TODO : Prefix Tuning? Refer to MINI-GPT5, task adaption or fusion in later context, REVEAL
         with torch.no_grad():
-            encoder_outputs = self.forward_encoder(samples, prompt)
-            if encoder_outputs.dim() == 2:
-                encoder_outputs = encoder_outputs.unsqueeze(1)
+            if retr_texts is not None: # Suppose we only test alignment
+                text = retr_texts[0]  # Currently suppose only top-1 used, since encoder length is also important
+            input_embeds = self.forward_encoder(audio, text)
+            batch_size, seq_length, _ = input_embeds.shape
+            shifted_attn_mask = input_embeds.new_zeros((batch_size, seq_length)).long()
+            shifted_attn_mask[:, :] = 1
+            if retr_audios is not None:
+                retr_audio_embeds = []
+                for retr_audio, retr_text in zip(retr_audios, retr_texts):
+                    retr_embed = self.forward_encoder(retr_audio, retr_text)
+                    retr_audio_embeds.append(retr_embed)
+                for retr_audio_embed, retr_text in zip(retr_audio_embeds, retr_texts):
+                    input_ids, attn_mask = self.prepare_text_input(retr_text, input_embeds.device)
+                    retr_input_embeds = torch.cat((retr_audio_embed, self.get_decoder_embeddings()(input_ids)), dim=1)
+                    shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(input_ids, attn_mask, retr_audio_embed.shape[1])
+                    input_embeds = torch.cat((retr_input_embeds, input_embeds), dim=1)
+                    shifted_attn_mask = torch.cat((shifted_retr_mask, shifted_attn_mask), dim=1)
             outputs = self.decoder.generate(
-                inputs_embeds=encoder_outputs,
+                inputs_embeds=input_embeds,
+                attention_mask=shifted_attn_mask,
                 num_beams=2,
                 min_length=0,
                 max_length=256,
