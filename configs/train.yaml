@@ -2,16 +2,12 @@ exp_name: 'pretrain'
 device: "cuda"
 seed: 20
 train_jsons: [
-  'data/json_files/BBC_Sound_Effects/bbc_final.json',
-  'data/json_files/FreeSound/fsd_final.json',
-  'data/json_files/SoundBible/sb_final.json',
-  "data/json_files/AudioSet_SL/as_final.json",
-  #"data/json_files/Clotho/clotho_final.json"
+  'data/json_files/AudioSet/train.json',
 ]
 val_jsons: [
   "data/json_files/AudioSet/val.json",
 ]
-blacklist: "data/json_files/blacklist/blacklist_exclude_test_ac.json"
+blacklist: ""
 # dataset == 'AudioCaps': sampling_rate = 32000
 # dataset == 'Clotho': sampling_rate = 44100
 # 48000 for CLAP
@@ -35,10 +31,11 @@ model_args:
   name: "CLAP2LLAMA"
   freeze_am: True
   freeze_lm: True
-  checkpoint_path: ""
+  checkpoint_path: "./pretrained_models/pretrained_LGTM/"
 
+# lr from wavcaps, linear scale lr
 optim_args:
-  lr: 1e-3
+  lr: 2.5e-5
   betas: [0.9, 0.99]
   eps: 1e-8
   momentum: 0.9
@@ -46,12 +43,12 @@ optim_args:
   weight_decay: 0.01
 
 training:
-  warmup_epochs: 1
-  epochs: 5
+  warmup_epochs: 2
+  epochs: 20
   clip_grad: 2
-  output_path: "./pretrained_models/audio_caption/"
-  eval: False
-  use_retrieval: False
+  output_path: "./finetuned_models/audio_caption/"
+  eval: True
+  use_retrieval: True
 
 index_args:
   index_save_path: "./data/index"
