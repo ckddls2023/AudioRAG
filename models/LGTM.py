@@ -40,6 +40,7 @@ class LGTM(nn.Module):
         for layer in self.token_merger.bert.encoder.layer:
             layer.output = None
             layer.intermediate = None
+        self.temperature = 0.07
 
     def forward(self, audio_embeds, text):
         # Embed text using T5 encoder
@@ -63,19 +64,16 @@ class LGTM(nn.Module):
             return_dict=True,
         )
         attention_scores = output.cross_attentions
-        # Token selection using text cross-attention score, get 64 tokens
-        # We can learn score of gumbel relaxation or MoE. But no criteria to learning it since we don't marginalize or weighted sum.
-        # TODO : Can we find attention score of CLAP when exists CLS token?
         attention_score = attention_scores[-1] # Get last layer attention
         attention_score = attention_score.mean(dim=1) # [B,S,T]
         logits_per_audio_feat = attention_score.max(-1)[0] # [B,S]
         token_index = torch.topk(logits_per_audio_feat, self.num_latents, dim=1)[1]
         sorted_index = torch.sort(token_index, dim=1)[0]
         feat = output.last_hidden_state # Fused with text information
-        audio_embed_query = feat[torch.arange(B).unsqueeze(1), token_index]
+        audio_embed_query = audio_embeds[torch.arange(B).unsqueeze(1), token_index]
         mask = torch.ones(B, S, dtype=torch.bool, device=audio_embeds.device) # Inverted index... other fancy way..?
         mask[torch.arange(B).unsqueeze(1), sorted_index] = False # This way is very slow compares to flops... painful..
-        audio_embed_fuse = feat[mask.unsqueeze(-1).expand_as(audio_embeds)].reshape(B,S-self.num_latents,-1)
+        audio_embed_fuse = audio_embeds[mask.unsqueeze(-1).expand_as(audio_embeds)].reshape(B,S-self.num_latents,-1)
         attn_mask = torch.ones(audio_embed_fuse.size()[:-1], dtype=torch.long).to(audio_embeds.device)
         # Self token merger
         output = self.token_merger.bert(
@@ -84,4 +82,12 @@ class LGTM(nn.Module):
             encoder_attention_mask=attn_mask,
             return_dict=True,
         )
-        return output
+        # ATC : Audio-Text Contrastive Alignment, add loss as auxilarity loss
+        pooled_text_embeds = torch.mean(text_embeds, dim=1) # [B,H]
+        pooled_audio_embeds = output.last_hidden_state # [B.H]
+        cos_sim = F.cosine_similarity(pooled_text_embeds, pooled_audio_embeds, dim=-1) # B, B
+        pos_mask = torch.eye(cos_sim.shape[0], dtype=torch.bool, device=cos_sim.device)
+        cos_sim = cos_sim / self.temperature
+        nll = -cos_sim[pos_mask] + torch.logsumexp(cos_sim, dim=-1)
+        nll = nll.mean()
+        return output, nll

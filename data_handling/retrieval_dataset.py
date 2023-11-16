@@ -1,101 +1,107 @@
+import types
 import faiss
+import librosa
 import pandas as pd
+import torch
+import torch.nn.functional as F
+from laion_clap import CLAP_Module
+
 
 # 필요하다면 나중에 utils 파일에 넣어도 되는 함수.
 def load_caption_wav_mapping(csv_path):
     df = pd.read_csv(csv_path)
-    return df['caption'].tolist(), df['wav_path'].tolist()
+    return df['caption'], df['wav_path']
     
 class RetrievalIndex:
-    def __init__(self, n_probe=16, use_gpu=False, index_path="./data/index", index_types = ["audio", "text"]):
+    def __init__(self, n_probe=16, index_path="./data/index", top_k=3, query_mode="audio2audio", device=None):
         
-        # text index
-        self.text_datastore = faiss.read_index(f"{index_path}/text_faiss_index.bin")
-        # audio index
-        self.audio_datastore = faiss.read_index(f"{index_path}/audio_faiss_index.bin")
-        # caption_wav_path.csv
-        self.caption_list, self.wav_path_list = load_caption_wav_mapping("./caption_wav_path.csv")
-        
-        # self.datastore = faiss.read_index(index_path, faiss.IO_FLAG_MMAP | faiss.IO_FLAG_READ_ONLY)
-        # self.datastore.nprobe = n_probe
+        self.datastore = {
+            "audio2text": faiss.read_index(f"{index_path}/text_faiss_index.bin"),
+            "audio2audio": faiss.read_index(f"{index_path}/audio_faiss_index.bin")
+        }
+        self.datastore["audio2text"].nprobe = n_probe
+        self.datastore["audio2audio"].nprobe = n_probe
+        self.captions, self.wav_paths = load_caption_wav_mapping(f"{index_path}/caption_wav_path.csv")
+
+        # Very redundant and should be avoided, currently
+        self.clap = CLAP_Module(enable_fusion=True)  # 615M
+        self.clap.load_ckpt()
+        self.clap.eval()
+        self.top_k = top_k
+        self.query_mode = query_mode
+        self.device = device
 
         # 보류
-        if use_gpu:
+        if device: # use_gpu
             co = faiss.GpuMultipleClonerOptions()
             co.useFloat16 = True
             co.useFloat16CoarseQuantizer = True
             co.usePrecomputed = False
-            co.indicesOptions = 0
+            co.indicesOptions = faiss.INDICES_32_BIT
             co.verbose = True
-            co.shard = True  # the replicas will be made "manually"
+            co.shard = False  # the replicas will be made "manually"
             res = [faiss.StandardGpuResources() for i in range(faiss.num_gpus())]
-            self.datastore = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore, co)
-            faiss.GpuParameterSpace().set_index_parameter(self.datastore, 'nprobe', n_probe)
+            self.datastore["audio2text"] = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore["audio2text"], co)
+            self.datastore["audio2audio"] = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore["audio2audio"], co)
+            faiss.GpuParameterSpace().set_index_parameter(self.datastore["audio2text"], 'nprobe', n_probe)
+            faiss.GpuParameterSpace().set_index_parameter(self.datastore["audio2audio"], 'nprobe', n_probe)
+            self.clap = self.clap.to(device)
+
+    def is_index_trained(self) -> bool:
+        return all(index.is_trained for index in self.datastore.values())
 
     # modal에 따른 query embedding을 만들어주는 함수
-    def query_embedding(modal, query_embedding):
-        # text_data = ["a dog is barking at a man walking by", "Wind and a man speaking are heard, accompanied by buzzing and ticking."]
-        # audio_file = ["./examples/yapping-dog.wav", "./examples/Yb0RFKhbpFJA.flac"]
-        
-        # from laion_clap import CLAP_Module
-        
-        # clap_model = CLAP_Module(enable_fusion=True)  # 615M
-        # clap_model.load_ckpt()
+    def query_embedding(self, samples):
+        if all(isinstance(item, str) for item in samples): # If it's text, but we don't have any cases that use text
+            text_embed = self.clap.get_text_embedding(samples, use_tensor=True)
+            return text_embed
+        else:
+            audio_embed = self.clap.get_audio_embedding_from_data(x=samples, use_tensor=True)  # B, 768
+            return audio_embed
 
-        # import torch
-        
-        # clap_model.eval()
-        # with torch.no_grad():
-        #     # text
-        #     text_embed = clap_model.get_text_embedding(text_data, use_tensor=True)
-        #     # audio
-        #     audio_embed = clap_model.get_audio_embedding_from_filelist(x = audio_file, use_tensor=True)
-        query_embeddings = query_embedding.cpu().detach().numpy().astype('float32')
-        return query_embeddings
-    
-    # modal에 따른 search 함수
-    def get_nns(self, modal, queries, k = 16, show = False):
-        index = {
-            "text": self.text_datastore,
-            "audio": self.audio_datastore
-        }
-        
-        D, I = index[modal].search(queries, k)
-        
-        if show:
-            for i, neighbors in enumerate(I):
-                print(f"Query {i}:")
-                for neighbor in neighbors:
-                    print(f" - Neighbor id: {neighbor}, Caption: {self.caption_list[neighbor]}, Wav path: {self.wav_path_list[neighbor]}")
-                print(f" - Distances: {D[i]}")
-        return D, I
+    def get_nns(self, queries, device):
+        """
+        Retrieves nearest neighbors for given queries from the datastore.
+
+        Args:
+            queries (Tensor): The batch of queries for which nearest neighbors are to be found.
+
+        Returns:
+            - D (List[List[float]]): A lists of distances between each query and its nearest neighbors.
+            - I (List[List[int]]): A list of lists containing indices of the nearest neighbors for each query.
+            - texts (List[List[str]]): A list of lists of strings, each list containing the captions corresponding to the nearest neighbor indices for each query.
+            - audio_samples (List[Tensor]): A list of tensors, each tensor is an audio sample loaded and transformed into a PyTorch tensor. Audio samples are loaded with librosa at a sampling rate of 48000, mono, and truncated to a duration of 10 seconds.
+
+        Note:
+            The method assumes the datastore, captions, and wav_paths attributes are already set in the class.
+        """
+        queries_embed = self.query_embedding(queries).detach().cpu().numpy()
+        D, I = self.datastore[self.query_mode].search(queries_embed, self.top_k) # In torch, it may return LongTensor
+        I_transposed = list(map(list, zip(*I))) # B,top_k -> top_k, B
+        texts = [self.captions[idx_list].tolist() for idx_list in I_transposed]
+        audio_paths = [self.wav_paths[idx_list].tolist() for idx_list in I_transposed]
+        audio_samples = []
+        for idx_list in audio_paths: # Batch of list k=1, k=2, k=3
+            audio_samples_batch = [torch.tensor(librosa.load(audio_file, sr=48000, mono=True)[0]) for audio_file in idx_list]
+            audio_samples.append(audio_samples_batch)
+        for idx, audio_sample_batch in enumerate(audio_samples): # Batch of list k=1, k=2, k=3
+            max_length = max([sample.shape[-1] for sample in audio_sample_batch])
+            for i, waveform in enumerate(audio_sample_batch):
+                if waveform.shape[-1] < max_length:
+                    pad_length = max_length - waveform.shape[-1]
+                    padded_waveform = F.pad(waveform, [0, pad_length], "constant", 0.0)
+                    audio_sample_batch[i] = padded_waveform
+            waveforms = torch.stack(audio_sample_batch, dim=0)
+            audio_samples[idx] = waveforms.to(device)
+        return D, I, texts, audio_samples
 
 if __name__ == "__main__":
     text_data = ["a dog is barking at a man walking by", "Wind and a man speaking are heard, accompanied by buzzing and ticking."]
-    audio_file = ["./examples/yapping-dog.wav", "./examples/Yb0RFKhbpFJA.flac"]
-    
-    from laion_clap import CLAP_Module
-    
-    clap_model = CLAP_Module(enable_fusion=True)  # 615M
-    clap_model.load_ckpt()
+    audio_files = ["./examples/yapping-dog.wav", "./examples/Yb0RFKhbpFJA.flac"]
+    index = RetrievalIndex(n_probe=16, index_path="./data/index/", top_k=3, query_mode="audio2audio")
+    audio_samples = [torch.tensor(librosa.load(audio_file, sr=48000, mono=True, duration=10)[0]) for audio_file in audio_files]
 
-    import torch
-    clap_model.eval()
-    with torch.no_grad():
-        # text
-        text_embed = clap_model.get_text_embedding(text_data, use_tensor=True)
-        print(text_embed)
-        print(text_embed.shape)
-
-        # audio
-        audio_embed = clap_model.get_audio_embedding_from_filelist(x=audio_file, use_tensor=True)
-        print(audio_embed)
-        print(audio_embed.shape)
-        
-    index = RetrievalIndex()
+    audio_query_embedding = index.query_embedding(audio_samples)
+    text_query_embedding = index.query_embedding(text_data)
     
-    audio_query_embedding = index.query_embedding(audio_embed)
-    text_query_embedding = index.query_embedding(text_embed)
-    
-    index.get_nns("audio", audio_query_embedding, k = 16, show = True)
-    index.get_nns("text", audio_query_embedding, k = 16, show = True)
+    index.get_nns(audio_query_embedding)
