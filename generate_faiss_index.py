@@ -111,7 +111,7 @@ def generate_faiss_index(config, dataloader):
     wav_paths = []
 
     # model
-    clap = CLAP_Module(enable_fusion=True)  # 615M
+    clap = CLAP_Module(enable_fusion=True, device = 'cuda:3')  # 615M
     clap.load_ckpt()  # download the default pretrained checkpoint.
 
     modalities = {

@@ -14,7 +14,7 @@ def load_caption_wav_mapping(csv_path):
     
 class RetrievalIndex:
     def __init__(self, n_probe=16, index_path="./data/index", top_k=3, query_mode="audio2audio", device=None):
-        
+        self.query_mode = query_mode
         self.datastore = {
             "audio2text": faiss.read_index(f"{index_path}/text_faiss_index.bin"),
             "audio2audio": faiss.read_index(f"{index_path}/audio_faiss_index.bin"),
@@ -56,8 +56,37 @@ class RetrievalIndex:
         if all(isinstance(item, str) for item in samples): # If it's text, but we don't have any cases that use text
             text_embed = self.clap.get_text_embedding(samples, use_tensor=True)
             return text_embed
+        elif self.query_mode == "frame2audio":
+            def get_audio_embedding_before_projection(self, data):
+                """Get the audio embedding from the model
+
+                Parameters
+                ----------
+                data: a list of dict
+                    the audio input dict list from 'get_audio_feature' method
+
+                Returns
+                ----------
+                audio_embed: torch.Tensor
+                    a tensor of audio_embeds (N, D)
+
+                """
+                device = next(self.parameters()).device
+                input_dict = {}
+                keys = data[0].keys()
+                for k in keys:
+                    input_dict[k] = torch.cat([d[k].unsqueeze(0) for d in data], dim=0).to(device)
+                audio_embeds = self.encode_audio(input_dict, device=device)["fine_grained_embedding"]
+                return audio_embeds
+            self.clap.model.get_audio_embedding = types.MethodType(get_audio_embedding_before_projection, self.clap.model)
+            audio_embed = self.clap.get_audio_embedding_from_data(x=samples, use_tensor=True)
+            chunks = audio_embed.chunk(4, dim=1)
+            averaged_chunks = [chunk.mean(dim=1, keepdim=True) for chunk in chunks]
+            audio_embeds = torch.cat(averaged_chunks, dim=1) # B, 4, 768
+            return audio_embeds
         else:
             audio_embed = self.clap.get_audio_embedding_from_data(x=samples, use_tensor=True)  # B, 768
+        
             return audio_embed
 
     def get_nns(self, queries, device):
@@ -77,6 +106,7 @@ class RetrievalIndex:
             The method assumes the datastore, captions, and wav_paths attributes are already set in the class.
         """
         queries_embed = queries.cpu().detach().numpy()
+        
         D, I = self.datastore[self.query_mode].search(queries_embed, self.top_k) # In torch, it may return LongTensor
         I_transposed = list(map(list, zip(*I))) # B,top_k -> top_k, B
         texts = [self.captions[idx_list].tolist() for idx_list in I_transposed]
@@ -101,10 +131,10 @@ if __name__ == "__main__":
     audio_files = ["./examples/yapping-dog.wav", "./examples/Yb0RFKhbpFJA.flac"]
     
     device = 'cuda:1'
-    index = RetrievalIndex(n_probe=16, index_path="./data/index/", top_k=3, query_mode="audio2audio", device = device)
+    index = RetrievalIndex(n_probe=16, index_path="./data/index/", top_k=3, query_mode="frame2audio", device = device)
     audio_samples = [torch.tensor(librosa.load(audio_file, sr=48000, mono=True, duration=10)[0]) for audio_file in audio_files]
 
     audio_query_embedding = index.query_embedding(audio_samples)
-    text_query_embedding = index.query_embedding(text_data)
+    # text_query_embedding = index.query_embedding(text_data, query_mode)
     
     index.get_nns(audio_query_embedding, device = device)
