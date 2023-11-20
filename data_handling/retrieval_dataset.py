@@ -17,13 +17,13 @@ class RetrievalIndex:
     def __init__(self, n_probe=16, index_path="./data/index", top_k=3, query_mode="audio2audio", device=None):
         self.query_mode = query_mode
         self.datastore = {
-            "audio2text": faiss.read_index(f"{index_path}/text_512_faiss_index.bin"),
-            "audio2audio": faiss.read_index(f"{index_path}/audio_512_faiss_index.bin"),
-            "frame2audio": faiss.read_index(f"{index_path}/audio_768_faiss_index.bin")
+            "audio2text": faiss.read_index(f"{index_path}/text_faiss_index.bin"),
+            "audio2audio": faiss.read_index(f"{index_path}/audio_faiss_index.bin"),
+            # "frame2audio": faiss.read_index(f"{index_path}/audio_768_faiss_index.bin")
         }
         self.datastore["audio2text"].nprobe = n_probe
         self.datastore["audio2audio"].nprobe = n_probe
-        self.datastore["frame2audio"].nprobe = n_probe
+        # self.datastore["frame2audio"].nprobe = n_probe
         self.captions, self.wav_paths = load_caption_wav_mapping(f"{index_path}/caption_wav_path.csv")
 
         # Very redundant and should be avoided, currently
@@ -44,10 +44,10 @@ class RetrievalIndex:
             res = [faiss.StandardGpuResources() for i in range(faiss.get_num_gpus())]
             self.datastore["audio2text"] = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore["audio2text"], co)
             self.datastore["audio2audio"] = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore["audio2audio"], co)
-            self.datastore["frame2audio"] = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore["frame2audio"], co)
+            # self.datastore["frame2audio"] = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore["frame2audio"], co)
             faiss.GpuParameterSpace().set_index_parameter(self.datastore["audio2text"], 'nprobe', n_probe)
             faiss.GpuParameterSpace().set_index_parameter(self.datastore["audio2audio"], 'nprobe', n_probe)
-            faiss.GpuParameterSpace().set_index_parameter(self.datastore["frame2audio"], 'nprobe', n_probe)
+            # faiss.GpuParameterSpace().set_index_parameter(self.datastore["frame2audio"], 'nprobe', n_probe)
 
     def is_index_trained(self) -> bool:
         return all(index.is_trained for index in self.datastore.values())
@@ -142,9 +142,10 @@ if __name__ == "__main__":
     
     device = 'cuda:3'
     
-    # audio2audio, audio2text: topk = 3.
-    # frame2audio: topk = 1 -> 각 frame의 top1이 모여서 4개 리턴.
-    index = RetrievalIndex(n_probe=16, index_path="./data/index/audioset&clotho", top_k=4, query_mode="audio2audio", device = device)
+    # 1번 경우, audio2audio, audio2text: topk = 4
+    # 2번 경우, frame2audio: topk = 1 -> 각 frame의 top1이 모여서 4개 리턴.
+    # 1번, 2번 경우 모두 batch x topk -> (2,4) 리턴합니다.
+    index = RetrievalIndex(n_probe=16, index_path="./data/original_pretrain_index", top_k=4, query_mode="audio2text", device = device)
     audio_samples = [torch.tensor(librosa.load(audio_file, sr=48000, mono=True, duration=10)[0]) for audio_file in audio_files]
 
     audio_query_embedding = index.query_embedding(audio_samples)

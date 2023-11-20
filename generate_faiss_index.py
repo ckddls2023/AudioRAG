@@ -257,8 +257,8 @@ if __name__ == "__main__":
     # # similarities = cosine_similarity(audio_embed[0].cpu(), audio_embed[0].cpu())
     # # print(similarities)
 
-    # audio_index = faiss.read_index("./data/index/audio_faiss_index.bin")
-    # text_index = faiss.read_index("./data/index/text_faiss_index.bin")
+    # audio_index = faiss.read_index("./data/original_pretrain_index/audio_faiss_index.bin")
+    # text_index = faiss.read_index("./data/original_pretrain_index/text_faiss_index.bin")
 
 
     # def load_caption_wav_mapping(csv_path):
@@ -276,7 +276,7 @@ if __name__ == "__main__":
     #         print(f" - Distances: {D[i]}")
 
 
-    # captions_list, wav_paths_list = load_caption_wav_mapping("caption_wav_path.csv")
+    # captions_list, wav_paths_list = load_caption_wav_mapping("./data/original_pretrain_index/caption_wav_path.csv")
 
     # # Convert your embeddings to the correct type for FAISS if they are not already numpy arrays
     # text_query_embeddings = text_embed.cpu().detach().numpy().astype('float32')
@@ -284,10 +284,10 @@ if __name__ == "__main__":
     # text_embed
 
     # k = 16
-    # # text2text
-    # check_nearest_neighbors(text_index, text_query_embeddings, k, captions_list, wav_paths_list)
-    # # text2audio
-    # check_nearest_neighbors(audio_index, text_query_embeddings, k, captions_list, wav_paths_list)
+    # # # text2text
+    # # check_nearest_neighbors(text_index, text_query_embeddings, k, captions_list, wav_paths_list)
+    # # # text2audio
+    # # check_nearest_neighbors(audio_index, text_query_embeddings, k, captions_list, wav_paths_list)
     # # audio2audio
     # check_nearest_neighbors(audio_index, audio_query_embeddings, k, captions_list, wav_paths_list)
     # # audio2text
