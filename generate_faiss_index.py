@@ -191,7 +191,7 @@ if __name__ == "__main__":
     selected_indices, captions_list, wav_paths = generate_faiss_index(config, dataloader)
     save_index(selected_indices, captions_list, wav_paths, config)
 
-    # # test
+    # test
     # text_data = ["a dog is barking at a man walking by", "Wind and a man speaking are heard, accompanied by buzzing and ticking."]
     # audio_file = ["./examples/yapping-dog.wav", "./examples/Yb0RFKhbpFJA.flac"]
 
@@ -294,7 +294,7 @@ if __name__ == "__main__":
     # check_nearest_neighbors(text_index, audio_query_embeddings, k, captions_list, wav_paths_list)
     
     
-    # # test2 for retrievalIndex class
+    # test2 for retrievalIndex class
     # index = RetrievalIndex()
     
     # audio_query_embedding = index.query_embedding(audio_embed)

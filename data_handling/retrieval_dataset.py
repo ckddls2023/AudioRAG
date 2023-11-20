@@ -1,4 +1,4 @@
-from types import types
+import types
 import faiss
 import librosa
 import pandas as pd
@@ -55,7 +55,7 @@ class RetrievalIndex:
             text_embed = self.clap.get_text_embedding(samples, use_tensor=True)
             return text_embed
         else:
-            audio_embed = self.clap.get_audio_embedding_from_data(x=samples, use_tensor=True)  # B, 768
+            audio_embed = self.clap.get_audio_embedding_from_data(x=samples, use_tensor=True)  # B, 768 -> 512 여기를 수정!
             return audio_embed
 
     def get_nns(self, queries):
@@ -74,7 +74,7 @@ class RetrievalIndex:
         Note:
             The method assumes the datastore, captions, and wav_paths attributes are already set in the class.
         """
-
+        queries = queries.cpu().detach().numpy().astype('float32')
         D, I = self.datastore[self.query_mode].search(queries, self.top_k) # In torch, it may return LongTensor
         I_transposed = list(map(list, zip(*I))) # B,top_k -> top_k, B
         texts = [self.captions[idx_list].tolist() for idx_list in I_transposed]
@@ -85,18 +85,18 @@ class RetrievalIndex:
             audio_samples_batch = [torch.tensor(librosa.load(audio_file, sr=48000, mono=True)[0]) for audio_file in idx_list]
             audio_samples.append(audio_samples_batch)
         for audio_sample_batch in audio_samples: # Batch of list k=1, k=2, k=3
-            max_length = max([i[0].shape[-1] for i in audio_sample_batch])
+            max_length = max([i.shape[-1] for i in audio_sample_batch]) # ?
             for i, waveform in enumerate(audio_sample_batch):
                 if waveform.shape[-1] < max_length:
                     pad_length = max_length - waveform.shape[-1]
                     padded_waveform = F.pad(waveform, [0, pad_length], "constant", 0.0)
-                audio_sample_batch[j] = padded_waveform
+                    audio_sample_batch[i] = padded_waveform
         return D, I, texts, audio_samples
 
 if __name__ == "__main__":
     text_data = ["a dog is barking at a man walking by", "Wind and a man speaking are heard, accompanied by buzzing and ticking."]
     audio_files = ["./examples/yapping-dog.wav", "./examples/Yb0RFKhbpFJA.flac"]
-    index = RetrievalIndex(n_probe=16, index_path="./data/index/", top_k=3, query_mode="audio2audio")
+    index = RetrievalIndex(n_probe=16, index_path="./data/index", top_k=3, query_mode="audio2audio")
     audio_samples = [torch.tensor(librosa.load(audio_file, sr=48000, mono=True, duration=10)[0]) for audio_file in audio_files]
 
     audio_query_embedding = index.query_embedding(audio_samples)
