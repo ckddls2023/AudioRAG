@@ -2,6 +2,7 @@ import types
 import faiss
 import librosa
 import pandas as pd
+import numpy as np
 import torch
 import torch.nn.functional as F
 from laion_clap import CLAP_Module
@@ -16,8 +17,8 @@ class RetrievalIndex:
     def __init__(self, n_probe=16, index_path="./data/index", top_k=3, query_mode="audio2audio", device=None):
         self.query_mode = query_mode
         self.datastore = {
-            "audio2text": faiss.read_index(f"{index_path}/text_faiss_index.bin"),
-            "audio2audio": faiss.read_index(f"{index_path}/audio_faiss_index.bin"),
+            "audio2text": faiss.read_index(f"{index_path}/text_512_faiss_index.bin"),
+            "audio2audio": faiss.read_index(f"{index_path}/audio_512_faiss_index.bin"),
             "frame2audio": faiss.read_index(f"{index_path}/audio_768_faiss_index.bin")
         }
         self.datastore["audio2text"].nprobe = n_probe
@@ -55,6 +56,7 @@ class RetrievalIndex:
     def query_embedding(self, samples):
         if all(isinstance(item, str) for item in samples): # If it's text, but we don't have any cases that use text
             text_embed = self.clap.get_text_embedding(samples, use_tensor=True)
+            text_embed = torch.unsqueeze(text_embed, 0)
             return text_embed
         elif self.query_mode == "frame2audio":
             def get_audio_embedding_before_projection(self, data):
@@ -82,11 +84,11 @@ class RetrievalIndex:
             audio_embed = self.clap.get_audio_embedding_from_data(x=samples, use_tensor=True)
             chunks = audio_embed.chunk(4, dim=1)
             averaged_chunks = [chunk.mean(dim=1, keepdim=True) for chunk in chunks]
-            audio_embeds = torch.cat(averaged_chunks, dim=1) # B, 4, 768
-            return audio_embeds
+            audio_embeds = torch.cat(averaged_chunks, dim=1).permute(1, 0, 2) # S, B, 768 -> EX. 4, 2, 768
+            return audio_embeds # 
         else:
-            audio_embed = self.clap.get_audio_embedding_from_data(x=samples, use_tensor=True)  # B, 768
-        
+            audio_embed = self.clap.get_audio_embedding_from_data(x=samples, use_tensor=True)  # B, 512
+            audio_embed = torch.unsqueeze(audio_embed, 0) # 1, B, 512 -> EX. 1, 2, 512
             return audio_embed
 
     def get_nns(self, queries, device):
@@ -105,33 +107,44 @@ class RetrievalIndex:
         Note:
             The method assumes the datastore, captions, and wav_paths attributes are already set in the class.
         """
-        queries_embed = queries.cpu().detach().numpy()
-        
-        D, I = self.datastore[self.query_mode].search(queries_embed, self.top_k) # In torch, it may return LongTensor
-        I_transposed = list(map(list, zip(*I))) # B,top_k -> top_k, B
-        texts = [self.captions[idx_list].tolist() for idx_list in I_transposed]
-        audio_paths = [self.wav_paths[idx_list].tolist() for idx_list in I_transposed]
-        audio_samples = []
-        for idx_list in audio_paths: # Batch of list k=1, k=2, k=3
-            audio_samples_batch = [torch.tensor(librosa.load(audio_file, sr=48000, mono=True)[0]) for audio_file in idx_list]
-            audio_samples.append(audio_samples_batch)
-        for idx, audio_sample_batch in enumerate(audio_samples): # Batch of list k=1, k=2, k=3
-            max_length = max([sample.shape[-1] for sample in audio_sample_batch])
-            for i, waveform in enumerate(audio_sample_batch):
-                if waveform.shape[-1] < max_length:
-                    pad_length = max_length - waveform.shape[-1]
-                    padded_waveform = F.pad(waveform, [0, pad_length], "constant", 0.0)
-                    audio_sample_batch[i] = padded_waveform
-            waveforms = torch.stack(audio_sample_batch, dim=0)
-            audio_samples[idx] = waveforms.to(device)
-        return D, I, texts, audio_samples
+        queries_embeds = queries.cpu().detach().numpy()
+        D_list, I_list, texts_list, audio_samples_list = [],[],[],[]
+        for _, queries_embed in enumerate(queries_embeds):
+            queries_embed = np.ascontiguousarray(queries_embed)
+            D, I = self.datastore[self.query_mode].search(queries_embed, self.top_k) # In torch, it may return LongTensor
+            I_transposed = list(map(list, zip(*I))) # B,top_k -> top_k, B
+            texts = [self.captions[idx_list].tolist() for idx_list in I_transposed]
+            audio_paths = [self.wav_paths[idx_list].tolist() for idx_list in I_transposed]
+            audio_samples = []
+            for idx_list in audio_paths: # Batch of list k=1, k=2, k=3
+                audio_samples_batch = [torch.tensor(librosa.load(audio_file, sr=48000, mono=True)[0]) for audio_file in idx_list]
+                audio_samples.append(audio_samples_batch)
+            for idx, audio_sample_batch in enumerate(audio_samples): # Batch of list k=1, k=2, k=3
+                max_length = max([sample.shape[-1] for sample in audio_sample_batch])
+                for i, waveform in enumerate(audio_sample_batch):
+                    if waveform.shape[-1] < max_length:
+                        pad_length = max_length - waveform.shape[-1]
+                        padded_waveform = F.pad(waveform, [0, pad_length], "constant", 0.0)
+                        audio_sample_batch[i] = padded_waveform
+                waveforms = torch.stack(audio_sample_batch, dim=0)
+                audio_samples[idx] = waveforms.to(device)
+            D_list.append(D)
+            I_list.append(I)
+            texts_list.extend(texts)
+            audio_samples_list.extend(audio_samples)
+        D = np.concatenate(D_list, axis=1)
+        I = np.concatenate(I_list, axis=1)
+        return D, I, texts_list, audio_samples_list
 
 if __name__ == "__main__":
     text_data = ["a dog is barking at a man walking by", "Wind and a man speaking are heard, accompanied by buzzing and ticking."]
     audio_files = ["./examples/yapping-dog.wav", "./examples/Yb0RFKhbpFJA.flac"]
     
-    device = 'cuda:1'
-    index = RetrievalIndex(n_probe=16, index_path="./data/index/", top_k=3, query_mode="frame2audio", device = device)
+    device = 'cuda:3'
+    
+    # audio2audio, audio2text: topk = 3.
+    # frame2audio: topk = 1 -> 각 frame의 top1이 모여서 4개 리턴.
+    index = RetrievalIndex(n_probe=16, index_path="./data/index/audioset&clotho", top_k=4, query_mode="audio2audio", device = device)
     audio_samples = [torch.tensor(librosa.load(audio_file, sr=48000, mono=True, duration=10)[0]) for audio_file in audio_files]
 
     audio_query_embedding = index.query_embedding(audio_samples)

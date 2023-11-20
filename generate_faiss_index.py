@@ -156,7 +156,7 @@ def generate_faiss_index(config, dataloader):
     wav_paths_list = [item for sublist in wav_paths for item in sublist]
     return selected_indices, captions, wav_paths_list 
 
-def save_index(selected_indices, captions_list, wav_paths, config):
+def save_index(selected_indices, captions_list, wav_paths, config, mode = 'pretrain'):
     save_path = config.index_args.index_save_path
     index_types = config.index_args.index_types
     dimension = {
@@ -176,7 +176,7 @@ def save_index(selected_indices, captions_list, wav_paths, config):
             'caption': captions_list,
             'wav_path': wav_paths
         })
-        captions_csv_path = "caption_wav_path.csv"
+        captions_csv_path = f"caption_wav_{mode}_path.csv"
         captions_df.to_csv(captions_csv_path, index=False)
         print(f"Captions and wav paths saved to {captions_csv_path}")
 
@@ -189,9 +189,9 @@ if __name__ == "__main__":
     # Process embeddings and concatenate into one tensor 48M samples can be processed in GPU memory
     dataloader = pretrain_dataloader(config, bucket=False, is_distributed=False, num_tasks=1, global_rank=0)
     selected_indices, captions_list, wav_paths = generate_faiss_index(config, dataloader)
-    save_index(selected_indices, captions_list, wav_paths, config)
+    save_index(selected_indices, captions_list, wav_paths, config, mode = 'pretrain') # pretrain or train
 
-    # # test
+    # test
     # text_data = ["a dog is barking at a man walking by", "Wind and a man speaking are heard, accompanied by buzzing and ticking."]
     # audio_file = ["./examples/yapping-dog.wav", "./examples/Yb0RFKhbpFJA.flac"]
 
@@ -219,7 +219,7 @@ if __name__ == "__main__":
     
     # clap_model = CLAP_Module(enable_fusion=True)  # 615M
     # clap_model.load_ckpt()
-    # clap_model.model.get_audio_embedding = types.MethodType(get_audio_embedding_before_projection, clap_model.model) 
+    # # clap_model.model.get_audio_embedding = types.MethodType(get_audio_embedding_before_projection, clap_model.model) 
 
     # # amodel: str
     # #     audio encoder architecture, default: HTSAT-tiny
