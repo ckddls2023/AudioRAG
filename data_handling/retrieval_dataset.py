@@ -13,24 +13,25 @@ def load_caption_wav_mapping(csv_path):
     return df['caption'], df['wav_path']
     
 class RetrievalIndex:
-    def __init__(self, n_probe=16, index_path="./data/index", top_k=3,query_mode="audio2audio", device=None):
+    def __init__(self, n_probe=16, index_path="./data/index", top_k=3, query_mode="audio2audio", device=None):
         
         self.datastore = {
             "audio2text": faiss.read_index(f"{index_path}/text_faiss_index.bin"),
-            "audio2audio": faiss.read_index(f"{index_path}/audio_faiss_index.bin")
+            "audio2audio": faiss.read_index(f"{index_path}/audio_faiss_index.bin"),
+            "frame2audio": faiss.read_index(f"{index_path}/audio_768_faiss_index.bin")
         }
         self.datastore["audio2text"].nprobe = n_probe
         self.datastore["audio2audio"].nprobe = n_probe
+        self.datastore["frame2audio"].nprobe = n_probe
         self.captions, self.wav_paths = load_caption_wav_mapping(f"{index_path}/caption_wav_path.csv")
 
         # Very redundant and should be avoided, currently
-        self.clap = CLAP_Module(enable_fusion=True)  # 615M
+        self.clap = CLAP_Module(enable_fusion=True, device = device)  # 615M
         self.clap.load_ckpt()
         self.clap.eval()
         self.top_k = top_k
         self.query_mode = query_mode
 
-        # 보류
         if device: # use_gpu
             co = faiss.GpuMultipleClonerOptions()
             co.useFloat16 = True
@@ -39,12 +40,13 @@ class RetrievalIndex:
             co.indicesOptions = faiss.INDICES_32_BIT
             co.verbose = True
             co.shard = False  # the replicas will be made "manually"
-            res = [faiss.StandardGpuResources() for i in range(faiss.num_gpus())]
+            res = [faiss.StandardGpuResources() for i in range(faiss.get_num_gpus())]
             self.datastore["audio2text"] = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore["audio2text"], co)
             self.datastore["audio2audio"] = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore["audio2audio"], co)
+            self.datastore["frame2audio"] = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore["frame2audio"], co)
             faiss.GpuParameterSpace().set_index_parameter(self.datastore["audio2text"], 'nprobe', n_probe)
             faiss.GpuParameterSpace().set_index_parameter(self.datastore["audio2audio"], 'nprobe', n_probe)
-            self.clap = self.clap.to(device)
+            faiss.GpuParameterSpace().set_index_parameter(self.datastore["frame2audio"], 'nprobe', n_probe)
 
     def is_index_trained(self) -> bool:
         return all(index.is_trained for index in self.datastore.values())
@@ -74,7 +76,7 @@ class RetrievalIndex:
         Note:
             The method assumes the datastore, captions, and wav_paths attributes are already set in the class.
         """
-        queries_embed = self.query_embedding(queries).cpu().numpy()
+        queries_embed = queries.cpu().detach().numpy()
         D, I = self.datastore[self.query_mode].search(queries_embed, self.top_k) # In torch, it may return LongTensor
         I_transposed = list(map(list, zip(*I))) # B,top_k -> top_k, B
         texts = [self.captions[idx_list].tolist() for idx_list in I_transposed]
@@ -97,10 +99,12 @@ class RetrievalIndex:
 if __name__ == "__main__":
     text_data = ["a dog is barking at a man walking by", "Wind and a man speaking are heard, accompanied by buzzing and ticking."]
     audio_files = ["./examples/yapping-dog.wav", "./examples/Yb0RFKhbpFJA.flac"]
-    index = RetrievalIndex(n_probe=16, index_path="./data/index/", top_k=3, query_mode="audio2audio")
+    
+    device = 'cuda:1'
+    index = RetrievalIndex(n_probe=16, index_path="./data/index/", top_k=3, query_mode="audio2audio", device = device)
     audio_samples = [torch.tensor(librosa.load(audio_file, sr=48000, mono=True, duration=10)[0]) for audio_file in audio_files]
 
     audio_query_embedding = index.query_embedding(audio_samples)
     text_query_embedding = index.query_embedding(text_data)
     
-    index.get_nns(audio_query_embedding)
+    index.get_nns(audio_query_embedding, device = device)
