@@ -34,10 +34,14 @@ def load_json_file(files, blacklist=None, train=True):
                 if item["duration"] > 40.0: # Avoid too much long audios
                     continue
                 if train:
-                    for i in range(json_obj["num_captions_per_audio"]):
-                        temp_dict = {"audio": item["audio"], "caption": item["caption"][i], "id": audio_id,
-                                     "duration": item["duration"]}
-                        json_data.append(temp_dict)
+                    if isinstance(item["caption"], list):
+                        for i in range(json_obj["num_captions_per_audio"]):
+                            temp_dict = {"audio": item["audio"], "caption": item["caption"][i], "id": audio_id,
+                                         "duration": item["duration"]}
+                            json_data.append(temp_dict)
+                    else:
+                        json_data.append(item)
+
                 else:
                     json_data.append(item)
                 audio_id += 1

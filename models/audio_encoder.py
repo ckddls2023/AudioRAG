@@ -47,7 +47,7 @@ class CLAPAudioTower(PreTrainedModel):
             input_dict = {}
             keys = data[0].keys()
             for k in keys:
-                input_dict[k] = torch.cat([d[k].unsqueeze(0) for d in data], dim=0).to(device)
+                input_dict[k] = torch.cat([d[k].unsqueeze(0) for d in data], dim=0).to(device).float()
             audio_embeds = self.encode_audio(input_dict, device=device)
             if select_feature == "fine_grained_embedding":
                 embeds = audio_embeds[select_feature] # [B,1024,768]

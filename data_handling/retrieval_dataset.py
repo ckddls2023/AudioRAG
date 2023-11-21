@@ -97,7 +97,7 @@ class RetrievalIndex:
                     padded_waveform = F.pad(waveform, [0, pad_length], "constant", 0.0)
                     audio_sample_batch[i] = padded_waveform
             waveforms = torch.stack(audio_sample_batch, dim=0)
-            audio_samples[idx] = waveforms.to(device=self.device, dtype=self.dtype)
+            audio_samples[idx] = waveforms.to(device=self.device)
         return D, I, texts, audio_samples
 
 if __name__ == "__main__":
