@@ -5,6 +5,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from laion_clap import CLAP_Module
+from laion_clap.training.data import get_audio_features, int16_to_float32, float32_to_int16
 
 
 # 필요하다면 나중에 utils 파일에 넣어도 되는 함수.
@@ -36,6 +37,19 @@ class RetrievalIndex:
             "fp16": torch.float16,
         }
         self.dtype = dtype_map[downcast]
+        self.audio_cfg = {
+            "audio_length": 1024,
+            "clip_samples": 480000,
+            "mel_bins": 64,
+            "sample_rate": 48000,
+            "window_size": 1024,
+            "hop_size": 480,
+            "fmin": 50,
+            "fmax": 14000,
+            "class_num": 527,
+            "model_type": "HTSAT",
+            "model_name": "base"
+        }
 
         # 보류
         if use_gpu: # use_gpu
@@ -61,7 +75,7 @@ class RetrievalIndex:
             text_embed = self.clap.get_text_embedding(samples, use_tensor=True)
             return text_embed
         else:
-            audio_embed = self.clap.get_audio_embedding_from_data(x=samples, use_tensor=True)
+            audio_embed = self.clap.model.get_audio_embedding(samples)
             return audio_embed
 
     def get_nns(self, queries):
@@ -85,20 +99,24 @@ class RetrievalIndex:
         I_transposed = list(map(list, zip(*I))) # B,top_k -> top_k, B
         texts = [self.captions[idx_list].tolist() for idx_list in I_transposed]
         audio_paths = [self.wav_paths[idx_list].tolist() for idx_list in I_transposed]
-        audio_samples = []
-        for idx_list in audio_paths: # Batch of list k=1, k=2, k=3
-            audio_samples_batch = [torch.tensor(librosa.load(audio_file, sr=48000, mono=True)[0]) for audio_file in idx_list]
-            audio_samples.append(audio_samples_batch)
-        for idx, audio_sample_batch in enumerate(audio_samples): # Batch of list k=1, k=2, k=3
-            max_length = max([sample.shape[-1] for sample in audio_sample_batch])
-            for i, waveform in enumerate(audio_sample_batch):
-                if waveform.shape[-1] < max_length:
-                    pad_length = max_length - waveform.shape[-1]
-                    padded_waveform = F.pad(waveform, [0, pad_length], "constant", 0.0)
-                    audio_sample_batch[i] = padded_waveform
-            waveforms = torch.stack(audio_sample_batch, dim=0)
-            audio_samples[idx] = waveforms.to(device=self.device)
-        return D, I, texts, audio_samples
+        audio_sample_batchs = []
+        for audio_path in audio_paths: # Batch of list k=1, k=2, k=3
+            audio_samples = []
+            for wav_path in audio_path:
+                waveform, sr = librosa.load(wav_path, sr=self.audio_cfg["sample_rate"], mono=True)
+                audio_waveform = int16_to_float32(float32_to_int16(waveform))
+                audio_waveform = torch.from_numpy(audio_waveform).float()
+                temp_dict = {}
+                temp_dict = get_audio_features(
+                    temp_dict, audio_waveform, 480000,
+                    data_truncating='fusion',
+                    data_filling='repeatpad',
+                    audio_cfg=self.audio_cfg,
+                    require_grad=False,
+                )
+                audio_samples.append(temp_dict)
+            audio_sample_batchs.append(audio_samples)
+        return D, I, texts, audio_sample_batchs
 
 if __name__ == "__main__":
     text_data = ["a dog is barking at a man walking by", "Wind and a man speaking are heard, accompanied by buzzing and ticking."]

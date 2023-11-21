@@ -1,5 +1,4 @@
 # Mainly Refer to pengi and SALMONN, MSCLAP
-import itertools
 from dataclasses import dataclass
 import torch
 import librosa
@@ -192,23 +191,21 @@ class CLAP2LLAMA(nn.Module):
         return output
 
     def forward(self, audio, text, retr_audios=None, retr_texts=None):
-        retr_audio_embeds=[]
+        audio_embed = self.forward_encoder(audio, text) # Only when needs text..
+        # audio_embed, loss = self.forward_encoder(audio, text)  # Only for LGTM
+        retr_audio_embeds = []
         if retr_audios is not None:
-            merged_audio = torch.stack([audio]+retr_audios, dim=0) # B
-            merged_text = text + list(itertools.chain.from_iterable(retr_texts))
-            audio_embed = self.forward_encoder(merged_audio, merged_text) # Only when needs text..
-            B, S, _ = audio_embed.shape
-            retr_audio_embeds = [audio_embed[B//3:2*B//3,:,:], audio_embed[2*B//3:,:,:]]
-            audio_embed = audio_embed[:B//3,:,:]
-        else:
-            audio_embed = self.forward_encoder(audio, text) # Only when needs text..
-            # audio_embed, loss = self.forward_encoder(audio, text)  # Only for LGTM
+            for retr_audio, retr_text in zip(retr_audios, retr_texts):
+                retr_embed = self.forward_encoder(retr_audio, retr_text)
+                retr_audio_embeds.append(retr_embed)
         output = self.forward_decoder(audio_embed, text, retr_audio_embeds, retr_texts)
         # output["loss"] += output["loss"] + 0.1 * loss
         return output
 
     def save_ckpt(self, checkpoint_path):
         # MLP, Perceiver Resamplerc
+        if not os.path.exists(checkpoint_path):
+            os.makedirs(checkpoint_path, exist_ok=True)
         torch.save(self.enc_to_dec_proj.state_dict(), checkpoint_path + "enc_to_dec_proj.bin")
         # # For Q-Former, additionally save
         # torch.save(self.decoder_proj.state_dict(), checkpoint_path + "decoder_proj.bin")
