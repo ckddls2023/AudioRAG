@@ -47,7 +47,7 @@ class CLAPAudioTower(PreTrainedModel):
             input_dict = {}
             keys = data[0].keys()
             for k in keys:
-                input_dict[k] = torch.cat([d[k].unsqueeze(0) for d in data], dim=0).to(device).float()
+                input_dict[k] = torch.cat([d[k].unsqueeze(0) for d in data], dim=0).to(device)
             audio_embeds = self.encode_audio(input_dict, device=device)
             if select_feature == "fine_grained_embedding":
                 embeds = audio_embeds[select_feature] # [B,1024,768]
@@ -59,12 +59,10 @@ class CLAPAudioTower(PreTrainedModel):
         self.clap.model.get_audio_embedding = types.MethodType(get_audio_embedding_patch, self.clap.model)
 
     @torch.no_grad()
-    def forward(self, input_ids,
-                output_attentions=False,
-                output_hidden_states=False,
-                return_dict=True
-                ):
-        outputs = self.clap.get_audio_embedding_from_data(x=input_ids, use_tensor=True)  # B, 768
+    def forward(self, data, return_dict=True):
+        # Info : Suppose input_ids already processed from given data loader, we directly call get_audio_embedding
+        # data : dictionary of "longer", "waveform"
+        outputs = self.clap.model.get_audio_embedding(data)  # B, 768
         if not return_dict:
             return (outputs,)
         return BaseModelOutput(outputs, None, None)

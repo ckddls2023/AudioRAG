@@ -13,6 +13,7 @@ from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from data_handling.datamodule import collate_fn
 from data_handling.sampler import BySequenceLengthSampler, BySequenceBatchSampler
 from data_handling.text_transform import text_preprocess
+from laion_clap.training.data import get_audio_features, int16_to_float32, float32_to_int16
 
 
 def load_json_file(files, blacklist=None, train=True):
@@ -31,7 +32,7 @@ def load_json_file(files, blacklist=None, train=True):
                 elif "AudioSet" in file and blacklist:
                     if item["id"] in blacklist["AudioSet"]:
                         continue
-                if item["duration"] > 40.0: # Avoid too much long audios
+                if item["duration"] > 40.0:  # Avoid too much long audios
                     continue
                 if train:
                     if isinstance(item["caption"], list):
@@ -41,7 +42,6 @@ def load_json_file(files, blacklist=None, train=True):
                             json_data.append(temp_dict)
                     else:
                         json_data.append(item)
-
                 else:
                     json_data.append(item)
                 audio_id += 1
@@ -61,25 +61,40 @@ class AudioLanguagePretrainDataset(Dataset):
         else:
             self.max_length = 0
 
+        self.audio_cfg = {
+            "audio_length": 1024,
+            "clip_samples": 480000,
+            "mel_bins": 64,
+            "sample_rate": 48000,
+            "window_size": 1024,
+            "hop_size": 480,
+            "fmin": 50,
+            "fmax": 14000,
+            "class_num": 527,
+            "model_type": "HTSAT",
+            "model_name": "base"
+        }
+
     def __len__(self):
         return len(self.json_data)
 
     def __getitem__(self, index):
-
         item = self.json_data[index]
         wav_path = item["audio"]
         duration = item["duration"]
         waveform, sr = librosa.load(wav_path, sr=self.sr, mono=True, duration=duration)
-
-        if self.max_length != 0:
-            # if audio length is longer than max_length, we randomly crop it to mac length
-            if waveform.shape[-1] > self.max_length:
-                max_start = waveform.shape[-1] - self.max_length
-                start = random.randint(0, max_start)
-                waveform = waveform[start: start + self.max_length]
-
+        audio_waveform = int16_to_float32(float32_to_int16(waveform))
+        audio_waveform = torch.from_numpy(audio_waveform).float()
+        temp_dict = {}
+        temp_dict = get_audio_features(
+            temp_dict, audio_waveform, 480000,
+            data_truncating='fusion',
+            data_filling='repeatpad',
+            audio_cfg=self.audio_cfg,
+            require_grad=False,
+        )
         caption = text_preprocess(item["caption"])
-        return torch.tensor(waveform), caption, wav_path
+        return temp_dict, caption, wav_path
 
 
 def pretrain_dataloader(config,
@@ -126,7 +141,6 @@ def pretrain_dataloader(config,
 
 
 if __name__ == '__main__':
-
     with open("../../WavCaps/captioning/settings/pretrain.yaml", "r") as f:
         config = yaml.safe_load(f)
     print(config)
