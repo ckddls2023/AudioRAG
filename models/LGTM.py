@@ -84,8 +84,8 @@ class LGTM(nn.Module):
         )
         # ATC : Audio-Text Contrastive Alignment, add loss as auxilarity loss
         pooled_text_embeds = torch.mean(text_embeds, dim=1) # [B,H]
-        pooled_audio_embeds = output.last_hidden_state # [B.H]
-        cos_sim = F.cosine_similarity(pooled_text_embeds, pooled_audio_embeds, dim=-1) # B, B
+        pooled_audio_embeds = torch.mean(output.last_hidden_state, dim=1) # [B.H]
+        cos_sim = F.cosine_similarity(pooled_audio_embeds[None, :], pooled_text_embeds[:, None], dim=-1)
         pos_mask = torch.eye(cos_sim.shape[0], dtype=torch.bool, device=cos_sim.device)
         cos_sim = cos_sim / self.temperature
         nll = -cos_sim[pos_mask] + torch.logsumexp(cos_sim, dim=-1)

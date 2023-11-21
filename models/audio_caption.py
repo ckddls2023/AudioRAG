@@ -20,72 +20,6 @@ class FrozenArgs:
     freeze_am: bool = True
 
 
-class CLAP2GPT2(nn.Module):
-
-    def __init__(self):
-        super(CLAP2GPT2, self).__init__()
-        self.encoder_config = CLAPEncoderConfig()
-        self.prefix_length = 1  # Only use embedding before projection, if fine-grained, re-calculate
-        self.encoder = CLAPAudioTower(self.encoder_config)
-        self.decoder = GPT2LMHeadModel.from_pretrained("gpt2-xl")
-        self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2-xl")
-        self.tokenizer.model_max_length = 256
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-            self.decoder.config.pad_token_id = self.decoder.config.eos_token_id
-        self.decoder_config = self.decoder.config
-
-        # Freeze all CLAP parameters
-        if self.encoder_config.freeze:
-            for p in self.encoder.parameters():
-                p.requires_grad = False
-
-        # Freeze all GPT2 parameters
-        # if self.decoder_config.freeze:
-        #     for p in self.gpt.parameters():
-        #         p.requires_grad = False
-
-        # Set 2Layer-MLP following LLAVA paper in NUIPS 2023
-        modules = [
-            nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size),
-            nn.GELU(),
-            nn.Linear(self.decoder_config.hidden_size, self.decoder_config.hidden_size)
-        ]
-        self.enc_to_dec_proj = nn.Sequential(*modules)
-
-    def forward_encoder(self, audios):
-        outputs = self.encoder(audios).last_hidden_state
-        outputs = outputs / outputs.norm(2, -1).reshape(-1, 1)  # Normalize embedding
-        outputs = self.enc_to_dec_proj(outputs)
-        return outputs
-
-    def get_dummy_token(self, batch_size: int, device: torch.device) -> torch.Tensor:
-        return torch.full((batch_size, self.prefix_length), -100, dtype=torch.int64, device=device)
-
-    def get_dummy_attn_mask(self, batch_size: int, device: torch.device) -> torch.Tensor:
-        return torch.full((batch_size, self.prefix_length), 1, dtype=torch.int64, device=device)
-
-    def forward_decoder(self, text, encoder_outputs):
-        text = self.tokenizer(text, padding='longest', truncation=True, max_length=256, return_tensors="pt")
-        input_ids = text["input_ids"].to(encoder_outputs.device)
-        attention_mask = text["attention_mask"].to(encoder_outputs.device)
-        embedding_text = self.decoder.transformer.wte(input_ids)
-        embedding_cat = torch.cat((encoder_outputs.unsqueeze(1), embedding_text), dim=1)
-        dummy_token = self.get_dummy_token(input_ids.shape[0], input_ids.device)
-        labels = torch.cat((dummy_token, input_ids), dim=1)
-        dummy_mask = self.get_dummy_attn_mask(input_ids.shape[0], input_ids.device)
-        attention_mask = torch.cat((dummy_mask, attention_mask), dim=1)
-        output = self.decoder(inputs_embeds=embedding_cat, labels=labels, attention_mask=attention_mask)
-        return output
-
-    def forward(self, audio, text):
-        audio_embeds = self.forward_encoder(audio)
-        output = self.forward_decoder(text, audio_embeds)
-        return output
-
-    # TODO : Re-design generate methods
-
-
 class CLAP2LLAMA(nn.Module):
 
     def __init__(self, args=FrozenArgs()):
@@ -123,7 +57,6 @@ class CLAP2LLAMA(nn.Module):
         # ]
         # self.enc_to_dec_proj = nn.Sequential(*modules)
 
-
         # Set Qformer following BLIP-2, Video-LLAMA
         # enc_to_dec_proj_config = BertConfig.from_pretrained("bert-base-uncased")
         # enc_to_dec_proj_config.num_hidden_layers = 2
@@ -157,7 +90,6 @@ class CLAP2LLAMA(nn.Module):
         self.freeze_am = args.freeze_am
         self.freeze_lm = args.freeze_lm
 
-
         # Freeze all CLAP parameters
         if args.freeze_am:
             for p in self.encoder.parameters():
@@ -178,7 +110,7 @@ class CLAP2LLAMA(nn.Module):
                 bias="none",
                 task_type=TaskType.CAUSAL_LM,
                 modules_to_save=['lm_head', 'embed_tokens'],
-                target_modules=["q_proj", "v_proj"] # Mini GPT5
+                target_modules=["q_proj", "v_proj"]  # Mini GPT5
             )
             # config = IA3Config(
             #     peft_type="IA3",
@@ -195,10 +127,8 @@ class CLAP2LLAMA(nn.Module):
 
     def forward_encoder(self, audios, text=None):
         outputs = self.encoder(audios).last_hidden_state
-        # Perceiver
-        # if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
-        #     outputs = outputs.unsqueeze(1) # [B,1,S,H]
         outputs = self.enc_to_dec_proj(outputs)
+        return outputs
 
         # Qformer
         # B, S = outputs.size()[:2]
@@ -215,16 +145,12 @@ class CLAP2LLAMA(nn.Module):
         #     return_dict=True,
         # )
         # outputs = self.decoder_proj(audio_query_output.last_hidden_state)
-        # Perceiver
-        # if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
-        #     outputs = outputs.squeeze(1) # [B,S,H]
-        return outputs
+        # return outputs
 
-        # Ours, Token merge with language guided selection
+        # # Ours, Token merge with language guided selection
         # audio_query_output, loss = self.enc_to_dec_proj(outputs, text)
         # outputs = self.decoder_proj(audio_query_output.last_hidden_state)
         # return outputs, loss
-
 
     def get_decoder_embeddings(self):
         if self.args.freeze_lm:
@@ -257,7 +183,8 @@ class CLAP2LLAMA(nn.Module):
             for retr_audio_embed, retr_text in zip(retr_audio_embeds, retr_texts):
                 retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_text, audio_embed.device)
                 retr_input_embeds = torch.cat((retr_audio_embed, self.get_decoder_embeddings()(retr_input_ids)), dim=1)
-                shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(retr_input_ids, retr_attn_mask, retr_audio_embed.shape[1])
+                shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(retr_input_ids, retr_attn_mask,
+                                                                               retr_audio_embed.shape[1])
                 input_embeds = torch.cat((retr_input_embeds, input_embeds), dim=1)
                 shifted_input_ids = torch.cat((shifted_retr_ids, shifted_input_ids), dim=1)
                 shifted_attn_mask = torch.cat((shifted_retr_mask, shifted_attn_mask), dim=1)
@@ -266,44 +193,47 @@ class CLAP2LLAMA(nn.Module):
 
     def forward(self, audio, text, retr_audios=None, retr_texts=None):
         audio_embed = self.forward_encoder(audio, text) # Only when needs text..
+        # audio_embed, loss = self.forward_encoder(audio, text)  # Only for LGTM
         retr_audio_embeds = []
         if retr_audios is not None:
             for retr_audio, retr_text in zip(retr_audios, retr_texts):
                 retr_embed = self.forward_encoder(retr_audio, retr_text)
                 retr_audio_embeds.append(retr_embed)
         output = self.forward_decoder(audio_embed, text, retr_audio_embeds, retr_texts)
+        # output["loss"] += output["loss"] + 0.1 * loss
         return output
 
     def save_ckpt(self, checkpoint_path):
         # MLP, Perceiver Resamplerc
         torch.save(self.enc_to_dec_proj.state_dict(), checkpoint_path + "enc_to_dec_proj.bin")
-        # For Q-Former, additionally save
+        # # For Q-Former, additionally save
         # torch.save(self.decoder_proj.state_dict(), checkpoint_path + "decoder_proj.bin")
-        # # For Ours, LGTM, seperately save
-        # torch.save(self.enc_to_dec_proj.audio2text_xattn.state_dict(), checkpoint_path+"audio2text_xattn.bin")
-        # torch.save(self.enc_to_dec_proj.token_merger.state_dict(), checkpoint_path+"token_merger.bin")
+        # # # For Ours, LGTM, seperately save
+        # torch.save(self.enc_to_dec_proj.audio2text_xattn.state_dict(), checkpoint_path + "audio2text_xattn.bin")
+        # torch.save(self.enc_to_dec_proj.token_merger.state_dict(), checkpoint_path + "token_merger.bin")
         if not self.freeze_lm:
             self.decoder.save_pretrained(checkpoint_path)
 
     def load_ckpt(self, checkpoint_path):
         # For MLP
-        self.enc_to_dec_proj.load_state_dict(torch.load(checkpoint_path+"enc_to_dec_proj.bin"))
+        self.enc_to_dec_proj.load_state_dict(torch.load(checkpoint_path + "enc_to_dec_proj.bin"))
         # # For Q-Former, additionally save
         # self.decoder_proj.load_state_dict(torch.load(checkpoint_path + "decoder_proj.bin"))
         # # For Ours, LGTM, seperately save
         # self.enc_to_dec_proj.audio2text_xattn.load_state_dict(torch.load(checkpoint_path+"audio2text_xattn.bin"))
         # self.enc_to_dec_proj.token_merger.load_state_dict(torch.load(checkpoint_path+"token_merger.bin"))
         if not self.freeze_lm and 'finetuned' in checkpoint_path:
-            self.decoder = PeftModel.from_pretrained(self.decoder, checkpoint_path) # suppose don't use get_peft_model
+            self.decoder = PeftModel.from_pretrained(self.decoder, checkpoint_path)  # suppose don't use get_peft_model
 
     def generate_caption(self, audio, text=None, retr_audios=None, retr_texts=None, prompt=None):
         r"""Generate audio captions for each audio recording in a batch"""
         # TODO : Instruction tuning? Or Task identifier?
         # TODO : Prefix Tuning? Refer to MINI-GPT5, task adaption or fusion in later context, REVEAL
         with torch.no_grad():
-            if retr_texts is not None: # Suppose we only test alignment
+            if retr_texts is not None:  # Suppose we only test alignment
                 text = retr_texts[0]  # Currently suppose only top-1 used, since encoder length is also important
             input_embeds = self.forward_encoder(audio, text)
+            # input_embeds, loss = self.forward_encoder(audio, text) # Only for LGTM, dict type will be better...
             batch_size, seq_length, _ = input_embeds.shape
             shifted_attn_mask = input_embeds.new_zeros((batch_size, seq_length)).long()
             shifted_attn_mask[:, :] = 1
