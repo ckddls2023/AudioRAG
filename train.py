@@ -15,7 +15,7 @@ import transformers
 from data_handling.pretrain_dataset import pretrain_dataloader
 from data_handling.retrieval_dataset import RetrievalIndex
 from accelerate import Accelerator, DistributedDataParallelKwargs
-from models.audio_caption import CLAP2LLAMA, FrozenArgs
+from models.audio_caption import CLAP2LLAMA
 import evaluate
 from metrics import SpiceMetric, CocoTokenizer, CiderMetric
 
@@ -116,7 +116,8 @@ def main():
         config=OmegaConf.to_container(config, resolve=True, throw_on_missing=True),
         init_kwargs={"wandb": {"name": exp_name}}
     )
-    model = CLAP2LLAMA(args=FrozenArgs(freeze_lm=config.model_args.freeze_lm,freeze_am=config.model_args.freeze_am))
+    model = CLAP2LLAMA(config.model_args)
+    accelerator.gradient_accumulation_steps = config.data_args.global_batch_size // (config.data_args.batch_size*accelerator.state.num_processes)
     if config.model_args.checkpoint_path:
         model.load_ckpt(config.model_args.checkpoint_path)
     train_dataloader = pretrain_dataloader(config, subset="train_jsons", bucket=False, is_distributed=False,num_tasks=1,global_rank=0,shuffle=True)

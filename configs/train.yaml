@@ -25,14 +25,35 @@ audio_args:
 
 data_args:
   dataset: "Clotho"
-  batch_size: 16
-  num_workers: 4
+  global_batch_size: 256
+  batch_size: 8
+  num_workers: 16
 
 model_args:
   name: "CLAP2LLAMA"
   freeze_am: True
   freeze_lm: False
   checkpoint_path: "./pretrained_models/pretrained_MLP/"
+  encoder:
+    model_name: "CLAPAudioEncoder"
+    pretrained: True
+    freeze: True
+    spec_augment: True
+    select_feature: "fine_grained_embedding"
+    sequence_length: 1024
+    hidden_size: 768
+    window_size: 16 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
+    step_size: 16
+  align:
+    model_name: "MLP"
+  peft_config:
+    r: 8
+    lora_alpha: 16
+    lora_dropout: 0.05
+    bias: "none"
+    task_type: "CAUSAL_LM"
+    modules_to_save: ['lm_head', 'embed_tokens']
+    target_modules: ["q_proj", "v_proj"]
 
 # lr from wavcaps, linear scale lr
 optim_args:

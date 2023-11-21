@@ -2,11 +2,11 @@
 from dataclasses import dataclass
 import torch
 import librosa
+from omegaconf import OmegaConf
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, LlamaForCausalLM, LlamaTokenizer, GPT2Config, LlamaConfig
-from optimum.bettertransformer import BetterTransformer
 from peft import LoraConfig, TaskType, IA3Config, get_peft_model, get_peft_model_state_dict, PeftModel, PeftConfig
 from models.audio_encoder import CLAPAudioTower, CLAPEncoderConfig, HTSATAudioTower, HTSATEncoderConfig
 from models.flamingo_pytorch import PerceiverResampler
@@ -14,17 +14,12 @@ from models.Qformer import *
 from models.LGTM import *
 
 
-@dataclass
-class FrozenArgs:
-    freeze_lm: bool = True
-    freeze_am: bool = True
-
-
 class CLAP2LLAMA(nn.Module):
 
-    def __init__(self, args=FrozenArgs()):
+    def __init__(self, config):
         super(CLAP2LLAMA, self).__init__()
-        self.encoder_config = CLAPEncoderConfig(select_feature="fine_grained_embedding")
+        self.config = config
+        self.encoder_config = CLAPEncoderConfig.from_dict(OmegaConf.to_container(config.encoder, resolve=True))
         self.encoder = CLAPAudioTower(self.encoder_config)
         self.decoder = LlamaForCausalLM.from_pretrained("lmsys/vicuna-7b-v1.5")  # v1.5 : LLAMA2 + VICUNA
         self.tokenizer = LlamaTokenizer.from_pretrained("lmsys/vicuna-7b-v1.5", use_fast=False)
@@ -32,128 +27,115 @@ class CLAP2LLAMA(nn.Module):
         # self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
         # self.tokenizer.padding_side = "right"
         self.decoder_config = self.decoder.config
-        self.args = args
 
-        # Set 2Layer-MLP following LLAVA paper in NEUIPS 2023
-        modules = [
-            nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size),
-            nn.GELU(),
-            nn.Linear(self.decoder_config.hidden_size, self.decoder_config.hidden_size)
-        ]
-        self.enc_to_dec_proj = nn.Sequential(*modules)
+        if self.config.align.model_name == "MLP":
+            modules = [
+                nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size),
+                nn.GELU(),
+                nn.Linear(self.decoder_config.hidden_size, self.decoder_config.hidden_size)
+            ]
+            self.enc_to_dec_proj = nn.Sequential(*modules)
+            self.forward_align = self.forward_mlp
 
-        # Set Perceiver Resampler following FLAMINGO paper 2021
-        # modules = [
-        #     PerceiverResampler(
-        #         dim=self.encoder_config.hidden_size,
-        #         depth=2,
-        #         dim_head=64,
-        #         heads=8,
-        #         num_latents=64,  # the number of latents to shrink your media sequence to, perceiver style
-        #         num_media_embeds=1,  # say you have 4 images maximum in your dialogue
-        #         grad_checkpoint=True
-        #     ),
-        #     nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size)
-        # ]
-        # self.enc_to_dec_proj = nn.Sequential(*modules)
+        if self.config.align.model_name == "Perceiver":
+            modules = [
+                PerceiverResampler(
+                    dim=self.encoder_config.hidden_size,
+                    depth=2,
+                    dim_head=64,
+                    heads=8,
+                    num_latents=64,  # the number of latents to shrink your media sequence to, perceiver style
+                    num_media_embeds=1,  # say you have 4 images maximum in your dialogue
+                    grad_checkpoint=True
+                ),
+                nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size)
+            ]
+            self.enc_to_dec_proj = nn.Sequential(*modules)
+            self.forward_align = self.forward_mlp
 
-        # Set Qformer following BLIP-2, Video-LLAMA
-        # enc_to_dec_proj_config = BertConfig.from_pretrained("bert-base-uncased")
-        # enc_to_dec_proj_config.num_hidden_layers = 2
-        # enc_to_dec_proj_config.encoder_width = self.encoder_config.hidden_size
-        # # insert cross-attention layer every other block
-        # enc_to_dec_proj_config.add_cross_attention = True
-        # enc_to_dec_proj_config.cross_attention_freq = 1
-        # enc_to_dec_proj_config.query_length = 64 # number of latents
-        # self.enc_to_dec_proj = BetterTransformer.transform(BertLMHeadModel(config=enc_to_dec_proj_config))
-        # self.audio_query_tokens = nn.Parameter(
-        #     torch.zeros(1, 64, enc_to_dec_proj_config.hidden_size)
-        # )
-        # self.audio_query_tokens.data.normal_(mean=0.0, std=enc_to_dec_proj_config.initializer_range)
-        # self.enc_to_dec_proj.cls = None
-        # self.enc_to_dec_proj.bert.embeddings.word_embeddings = None
-        # self.enc_to_dec_proj.bert.embeddings.position_embeddings = None
-        # for layer in self.enc_to_dec_proj.bert.encoder.layer:
-        #     layer.output = None
-        #     layer.intermediate = None
-        # self.decoder_proj = nn.Linear(
-        #     self.encoder_config.hidden_size, self.decoder_config.hidden_size
-        # )
-        # self.audio_position_embedding = nn.Embedding(256, self.encoder_config.hidden_size)
+        if self.config.align.model_name == "Qformer":
+            enc_to_dec_proj_config = BertConfig.from_pretrained("bert-base-uncased")
+            enc_to_dec_proj_config.num_hidden_layers = 2
+            enc_to_dec_proj_config.encoder_width = self.encoder_config.hidden_size
+            # insert cross-attention layer every other block
+            enc_to_dec_proj_config.add_cross_attention = True
+            enc_to_dec_proj_config.cross_attention_freq = 1
+            enc_to_dec_proj_config.query_length = 64 # number of latents
+            self.audio_query_tokens = nn.Parameter(torch.zeros(1, 64, enc_to_dec_proj_config.hidden_size))
+            self.audio_query_tokens.data.normal_(mean=0.0, std=enc_to_dec_proj_config.initializer_range)
+            self.enc_to_dec_proj.cls = None
+            self.enc_to_dec_proj.bert.embeddings.word_embeddings = None
+            self.enc_to_dec_proj.bert.embeddings.position_embeddings = None
+            for layer in self.enc_to_dec_proj.bert.encoder.layer:
+                layer.output = None
+                layer.intermediate = None
+            self.decoder_proj = nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size)
+            self.audio_position_embedding = nn.Embedding(256, self.encoder_config.hidden_size)
+            self.forward_align = self.forward_qformer
 
         # Ours, token merge with langauge guided selection
-        # self.enc_to_dec_proj = LGTM(hidden_size=self.encoder_config.hidden_size, num_latents=64)
-        # self.decoder_proj = nn.Linear(
-        #     self.encoder_config.hidden_size, self.decoder_config.hidden_size
-        # )
+        if self.config.align.model_name == "LGTM":
+            self.enc_to_dec_proj = LGTM(hidden_size=self.encoder_config.hidden_size, num_latents=64)
+            self.decoder_proj = nn.Linear(
+                self.encoder_config.hidden_size, self.decoder_config.hidden_size
+            )
+            self.forward_align = self.forward_lgtm
 
-        self.freeze_am = args.freeze_am
-        self.freeze_lm = args.freeze_lm
+        self.freeze_am = config.freeze_am
+        self.freeze_lm = config.freeze_lm
 
         # Freeze all CLAP parameters
         self.decoder.gradient_checkpointing_enable()
-        if args.freeze_am:
+        if self.freeze_am:
             for p in self.encoder.parameters():
                 p.requires_grad = False
 
         # Freeze all LM parameters
-        if args.freeze_lm:
+        if self.freeze_lm:
             self.decoder.eval()
-            print("Freezing the LLAMA.")
             for param in self.decoder.parameters():
                 param.requires_grad = False
         else:
-            # target_modules = ["k_proj", "q_proj", "up_proj", "down_proj", "o_proj", "gate_proj", "v_proj"] # need ZERO 3..
-            self.peft_config = LoraConfig(  # Following QLoRA, Recent Model use all target to tune LORA
-                r=8,
-                lora_alpha=16,
-                lora_dropout=0.05,
-                bias="none",
-                task_type=TaskType.CAUSAL_LM,
-                modules_to_save=['lm_head', 'embed_tokens'],
-                target_modules=["q_proj", "v_proj"]  # Mini GPT5
-            )
-            # config = IA3Config(
-            #     peft_type="IA3",
-            #     task_type="CAUSAL_LM",
-            #     target_modules=['q_proj', 'k_proj', 'down_proj'],
-            #     feedforward_modules=["down_proj"],
-            # )
+            self.peft_config = LoraConfig(**config.peft_config)
             self.decoder = get_peft_model(self.decoder, self.peft_config)
             self.decoder.base_model.model.model.embed_tokens.original_module.weight.requires_grad = False
             self.decoder.base_model.model.lm_head.original_module.weight.requires_grad = False
             self.decoder.print_trainable_parameters()
 
 
+    def forward_mlp(self, x, text=None):
+        outputs = self.enc_to_dec_proj(x)
+        return outputs, None
+
+    def forward_qformer(self, outputs, text=None):
+        B, S = outputs.size()[:2]
+        position_ids = torch.arange(S, dtype=torch.long, device=outputs.device)
+        position_ids = position_ids.unsqueeze(0).expand(B, -1)
+        audio_position_embeddings = self.audio_position_embedding(position_ids)
+        outputs = outputs + audio_position_embeddings
+        audio_query_tokens = self.audio_query_tokens.expand(outputs.shape[0], -1, -1)
+        frame_atts = torch.ones(outputs.size()[:-1], dtype=torch.long).to(outputs.device)
+        audio_query_output = self.enc_to_dec_proj.bert(
+            query_embeds=audio_query_tokens,  # [32,768]
+            encoder_hidden_states=outputs,
+            encoder_attention_mask=frame_atts,
+            return_dict=True,
+        )
+        outputs = self.decoder_proj(audio_query_output.last_hidden_state)
+        return outputs, None
+
+    def forward_lgtm(self, outputs, text):
+        audio_query_output, loss = self.enc_to_dec_proj(outputs, text)
+        outputs = self.decoder_proj(audio_query_output.last_hidden_state)
+        return outputs, loss
+
     def forward_encoder(self, audios, text=None):
         outputs = self.encoder(audios).last_hidden_state
-        outputs = self.enc_to_dec_proj(outputs)
-        return outputs
-
-        # Qformer
-        # B, S = outputs.size()[:2]
-        # position_ids = torch.arange(S, dtype=torch.long, device=outputs.device)
-        # position_ids = position_ids.unsqueeze(0).expand(B, -1)
-        # audio_position_embeddings = self.audio_position_embedding(position_ids)
-        # outputs = outputs + audio_position_embeddings
-        # audio_query_tokens = self.audio_query_tokens.expand(outputs.shape[0], -1, -1)
-        # frame_atts = torch.ones(outputs.size()[:-1], dtype=torch.long).to(outputs.device)
-        # audio_query_output = self.enc_to_dec_proj.bert(
-        #     query_embeds=audio_query_tokens,  # [32,768]
-        #     encoder_hidden_states=outputs,
-        #     encoder_attention_mask=frame_atts,
-        #     return_dict=True,
-        # )
-        # outputs = self.decoder_proj(audio_query_output.last_hidden_state)
-        # return outputs
-
-        # # Ours, Token merge with language guided selection
-        # audio_query_output, loss = self.enc_to_dec_proj(outputs, text)
-        # outputs = self.decoder_proj(audio_query_output.last_hidden_state)
-        # return outputs, loss
+        outputs, loss = self.forward_align(outputs, text) # loss is None for MLP, Perceiver, Q-former
+        return outputs, loss
 
     def get_decoder_embeddings(self):
-        if self.args.freeze_lm:
+        if self.freeze_lm:
             return self.decoder.get_input_embeddings()
         else:
             return self.decoder.base_model.get_input_embeddings()
@@ -191,50 +173,50 @@ class CLAP2LLAMA(nn.Module):
         return output
 
     def forward(self, audio, text, retr_audios=None, retr_texts=None):
-        audio_embed = self.forward_encoder(audio, text) # Only when needs text..
-        # audio_embed, loss = self.forward_encoder(audio, text)  # Only for LGTM
+        audio_embed, loss = self.forward_encoder(audio, text)  # Only for LGTM
         retr_audio_embeds = []
         if retr_audios is not None:
             for retr_audio, retr_text in zip(retr_audios, retr_texts):
                 retr_embed = self.forward_encoder(retr_audio, retr_text)
                 retr_audio_embeds.append(retr_embed)
         output = self.forward_decoder(audio_embed, text, retr_audio_embeds, retr_texts)
-        # output["loss"] += output["loss"] + 0.1 * loss
+        if loss is not None:
+            output["loss"] += output["loss"] + 0.1 * loss
         return output
 
     def save_ckpt(self, checkpoint_path):
-        # MLP, Perceiver Resamplerc
         if not os.path.exists(checkpoint_path):
             os.makedirs(checkpoint_path, exist_ok=True)
-        torch.save(self.enc_to_dec_proj.state_dict(), checkpoint_path + "enc_to_dec_proj.bin")
-        # # For Q-Former, additionally save
-        # torch.save(self.decoder_proj.state_dict(), checkpoint_path + "decoder_proj.bin")
-        # # # For Ours, LGTM, seperately save
-        # torch.save(self.enc_to_dec_proj.audio2text_xattn.state_dict(), checkpoint_path + "audio2text_xattn.bin")
-        # torch.save(self.enc_to_dec_proj.token_merger.state_dict(), checkpoint_path + "token_merger.bin")
+        if self.config.align.model_name == "MLP" or self.config.align.model_name == "Perceiver":
+            torch.save(self.enc_to_dec_proj.state_dict(), checkpoint_path + "enc_to_dec_proj.bin")
+        if self.config.align.model_name == "Qformer" or self.config.align.model_name == "LGTM":
+            torch.save(self.decoder_proj.state_dict(), checkpoint_path + "decoder_proj.bin")
+        if self.config.align.model_name == "LGTM":
+            torch.save(self.enc_to_dec_proj.audio2text_xattn.state_dict(), checkpoint_path + "audio2text_xattn.bin")
+            torch.save(self.enc_to_dec_proj.token_merger.state_dict(), checkpoint_path + "token_merger.bin")
         if not self.freeze_lm:
             self.decoder.save_pretrained(checkpoint_path)
 
     def load_ckpt(self, checkpoint_path):
-        # For MLP
-        self.enc_to_dec_proj.load_state_dict(torch.load(checkpoint_path + "enc_to_dec_proj.bin"))
-        # # For Q-Former, additionally save
-        # self.decoder_proj.load_state_dict(torch.load(checkpoint_path + "decoder_proj.bin"))
-        # # For Ours, LGTM, seperately save
-        # self.enc_to_dec_proj.audio2text_xattn.load_state_dict(torch.load(checkpoint_path+"audio2text_xattn.bin"))
-        # self.enc_to_dec_proj.token_merger.load_state_dict(torch.load(checkpoint_path+"token_merger.bin"))
+        if self.config.align.model_name == "MLP" or self.config.align.model_name == "Perceiver":
+            self.enc_to_dec_proj.load_state_dict(torch.load(checkpoint_path + "enc_to_dec_proj.bin"))
+        if self.config.align.model_name == "Qformer" or self.config.align.model_name == "LGTM":
+            self.decoder_proj.load_state_dict(torch.load(checkpoint_path + "decoder_proj.bin"))
+        if self.config.align.model_name == "LGTM":
+            self.enc_to_dec_proj.audio2text_xattn.load_state_dict(torch.load(checkpoint_path+"audio2text_xattn.bin"))
+            self.enc_to_dec_proj.token_merger.load_state_dict(torch.load(checkpoint_path+"token_merger.bin"))
         if not self.freeze_lm and 'finetuned' in checkpoint_path:
-            self.decoder = PeftModel.from_pretrained(self.decoder, checkpoint_path)  # suppose don't use get_peft_model
+            self.decoder = PeftModel.from_pretrained(self.decoder.base_model, checkpoint_path)  # suppose don't use get_peft_model
 
     def generate_caption(self, audio, text=None, retr_audios=None, retr_texts=None, prompt=None):
         r"""Generate audio captions for each audio recording in a batch"""
         # TODO : Instruction tuning? Or Task identifier?
         # TODO : Prefix Tuning? Refer to MINI-GPT5, task adaption or fusion in later context, REVEAL
         with torch.no_grad():
-            # if retr_texts is not None:  # Suppose we only test alignment
-            #     text = retr_texts[0]  # Currently suppose only top-1 used, since encoder length is also important
-            # input_embeds, loss = self.forward_encoder(audio, text) # Only for LGTM, dict type will be better...
-            input_embeds = self.forward_encoder(audio, text)
+            if retr_texts is not None:  # Suppose we only test alignment
+                text = retr_texts[0]  # Currently suppose only top-1 used, since encoder length is also important
+            input_embeds, loss = self.forward_encoder(audio, text) # Only for LGTM, dict type will be better...
+            # input_embeds = self.forward_encoder(audio, text)
             batch_size, seq_length, _ = input_embeds.shape
             shifted_attn_mask = input_embeds.new_zeros((batch_size, seq_length)).long()
             shifted_attn_mask[:, :] = 1

@@ -82,10 +82,12 @@ class AudioLanguagePretrainDataset(Dataset):
         item = self.json_data[index]
         wav_path = item["audio"]
         duration = item["duration"]
-        waveform, sr = librosa.load(wav_path, sr=self.sr, mono=True, duration=duration)
+        waveform, sr = librosa.load(wav_path, sr=self.sr, duration=duration)
         audio_waveform = int16_to_float32(float32_to_int16(waveform))
         audio_waveform = torch.from_numpy(audio_waveform).float()
         temp_dict = {}
+        if len(audio_waveform) == 0:
+            print(f"wav_path : {wav_path} is empty")
         temp_dict = get_audio_features(
             temp_dict, audio_waveform, 480000,
             data_truncating='fusion',
