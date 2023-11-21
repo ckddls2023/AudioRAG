@@ -19,11 +19,11 @@ class RetrievalIndex:
         self.datastore = {
             "audio2text": faiss.read_index(f"{index_path}/text_faiss_index.bin"),
             "audio2audio": faiss.read_index(f"{index_path}/audio_faiss_index.bin"),
-            # "frame2audio": faiss.read_index(f"{index_path}/audio_768_faiss_index.bin")
+            "frame2audio": faiss.read_index(f"{index_path}/audio_768_faiss_index.bin")
         }
         self.datastore["audio2text"].nprobe = n_probe
         self.datastore["audio2audio"].nprobe = n_probe
-        # self.datastore["frame2audio"].nprobe = n_probe
+        self.datastore["frame2audio"].nprobe = n_probe
         self.captions, self.wav_paths = load_caption_wav_mapping(f"{index_path}/caption_wav_path.csv")
 
         # Very redundant and should be avoided, currently
@@ -44,10 +44,10 @@ class RetrievalIndex:
             res = [faiss.StandardGpuResources() for i in range(faiss.get_num_gpus())]
             self.datastore["audio2text"] = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore["audio2text"], co)
             self.datastore["audio2audio"] = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore["audio2audio"], co)
-            # self.datastore["frame2audio"] = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore["frame2audio"], co)
+            self.datastore["frame2audio"] = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore["frame2audio"], co)
             faiss.GpuParameterSpace().set_index_parameter(self.datastore["audio2text"], 'nprobe', n_probe)
             faiss.GpuParameterSpace().set_index_parameter(self.datastore["audio2audio"], 'nprobe', n_probe)
-            # faiss.GpuParameterSpace().set_index_parameter(self.datastore["frame2audio"], 'nprobe', n_probe)
+            faiss.GpuParameterSpace().set_index_parameter(self.datastore["frame2audio"], 'nprobe', n_probe)
 
     def is_index_trained(self) -> bool:
         return all(index.is_trained for index in self.datastore.values())

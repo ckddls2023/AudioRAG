@@ -108,7 +108,9 @@ class PerceiverResampler(nn.Module):
                 latents = attn(x, latents) + latents
                 latents = ff(latents) + latents
 
-        return self.norm(latents)
+        output = self.norm(latents)
+        output = rearrange(output, 'b 1 n d -> b n d')
+        return output
 
 
 # gated cross attention

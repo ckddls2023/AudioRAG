@@ -20,72 +20,6 @@ class FrozenArgs:
     freeze_am: bool = True
 
 
-class CLAP2GPT2(nn.Module):
-
-    def __init__(self):
-        super(CLAP2GPT2, self).__init__()
-        self.encoder_config = CLAPEncoderConfig()
-        self.prefix_length = 1  # Only use embedding before projection, if fine-grained, re-calculate
-        self.encoder = CLAPAudioTower(self.encoder_config)
-        self.decoder = GPT2LMHeadModel.from_pretrained("gpt2-xl")
-        self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2-xl")
-        self.tokenizer.model_max_length = 256
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-            self.decoder.config.pad_token_id = self.decoder.config.eos_token_id
-        self.decoder_config = self.decoder.config
-
-        # Freeze all CLAP parameters
-        if self.encoder_config.freeze:
-            for p in self.encoder.parameters():
-                p.requires_grad = False
-
-        # Freeze all GPT2 parameters
-        # if self.decoder_config.freeze:
-        #     for p in self.gpt.parameters():
-        #         p.requires_grad = False
-
-        # Set 2Layer-MLP following LLAVA paper in NUIPS 2023
-        modules = [
-            nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size),
-            nn.GELU(),
-            nn.Linear(self.decoder_config.hidden_size, self.decoder_config.hidden_size)
-        ]
-        self.enc_to_dec_proj = nn.Sequential(*modules)
-
-    def forward_encoder(self, audios):
-        outputs = self.encoder(audios).last_hidden_state
-        outputs = outputs / outputs.norm(2, -1).reshape(-1, 1)  # Normalize embedding
-        outputs = self.enc_to_dec_proj(outputs)
-        return outputs
-
-    def get_dummy_token(self, batch_size: int, device: torch.device) -> torch.Tensor:
-        return torch.full((batch_size, self.prefix_length), -100, dtype=torch.int64, device=device)
-
-    def get_dummy_attn_mask(self, batch_size: int, device: torch.device) -> torch.Tensor:
-        return torch.full((batch_size, self.prefix_length), 1, dtype=torch.int64, device=device)
-
-    def forward_decoder(self, text, encoder_outputs):
-        text = self.tokenizer(text, padding='longest', truncation=True, max_length=256, return_tensors="pt")
-        input_ids = text["input_ids"].to(encoder_outputs.device)
-        attention_mask = text["attention_mask"].to(encoder_outputs.device)
-        embedding_text = self.decoder.transformer.wte(input_ids)
-        embedding_cat = torch.cat((encoder_outputs.unsqueeze(1), embedding_text), dim=1)
-        dummy_token = self.get_dummy_token(input_ids.shape[0], input_ids.device)
-        labels = torch.cat((dummy_token, input_ids), dim=1)
-        dummy_mask = self.get_dummy_attn_mask(input_ids.shape[0], input_ids.device)
-        attention_mask = torch.cat((dummy_mask, attention_mask), dim=1)
-        output = self.decoder(inputs_embeds=embedding_cat, labels=labels, attention_mask=attention_mask)
-        return output
-
-    def forward(self, audio, text):
-        audio_embeds = self.forward_encoder(audio)
-        output = self.forward_decoder(text, audio_embeds)
-        return output
-
-    # TODO : Re-design generate methods
-
-
 class CLAP2LLAMA(nn.Module):
 
     def __init__(self, args=FrozenArgs()):
@@ -122,7 +56,10 @@ class CLAP2LLAMA(nn.Module):
         #     nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size)
         # ]
         # self.enc_to_dec_proj = nn.Sequential(*modules)
+<<<<<<< HEAD
 
+=======
+>>>>>>> main
 
         # Set Qformer following BLIP-2, Video-LLAMA
         # enc_to_dec_proj_config = BertConfig.from_pretrained("bert-base-uncased")
@@ -153,10 +90,18 @@ class CLAP2LLAMA(nn.Module):
         self.decoder_proj = nn.Linear(
             self.encoder_config.hidden_size, self.decoder_config.hidden_size
         )
+<<<<<<< HEAD
+
+        self.freeze_am = args.freeze_am
+        self.freeze_lm = args.freeze_lm
+=======
+>>>>>>> main
 
         self.freeze_am = args.freeze_am
         self.freeze_lm = args.freeze_lm
 
+        self.freeze_am = args.freeze_am
+        self.freeze_lm = args.freeze_lm
 
         # Freeze all CLAP parameters
         if args.freeze_am:
@@ -194,10 +139,8 @@ class CLAP2LLAMA(nn.Module):
 
     def forward_encoder(self, audios, text=None):
         outputs = self.encoder(audios).last_hidden_state
-        # Perceiver
-        # if isinstance(self.enc_to_dec_proj[0], PerceiverResampler):
-        #     outputs = outputs.unsqueeze(1) # [B,1,S,H]
-        # outputs = self.enc_to_dec_proj(outputs)
+        outputs = self.enc_to_dec_proj(outputs)
+        return outputs
 
         # Qformer
         # B, S = outputs.size()[:2]
@@ -214,6 +157,7 @@ class CLAP2LLAMA(nn.Module):
         #     return_dict=True,
         # )
         # outputs = self.decoder_proj(audio_query_output.last_hidden_state)
+        # return outputs
 
         # Ours, Token merge with language guided selection
         audio_query_output = self.enc_to_dec_proj(outputs, text)
