@@ -240,8 +240,7 @@ class CLAP2LLAMA(nn.Module):
                 top_p=0.9,
                 repetition_penalty=1.1,
             )
-            captions = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        return captions
+        return outputs
 
 
 if __name__ == "__main__":

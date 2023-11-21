@@ -1,5 +1,4 @@
 exp_name: 'pretrain'
-device: "cuda"
 seed: 20
 train_jsons: [
   'data/json_files/BBC_Sound_Effects/bbc_final.json',
@@ -45,8 +44,8 @@ model_args:
     select_feature: "fine_grained_embedding"
     sequence_length: 1024
     hidden_size: 768
-    window_size: 4 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
-    step_size: 4
+    window_size: 16 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
+    step_size: 16 
   align:
     model_name: "MLP"
   peft_config:
@@ -72,7 +71,7 @@ training:
   epochs: 5
   clip_grad: 2
   output_path: "./pretrained_models/audio_caption/"
-  eval: False
+  eval: True
   use_retrieval: False
 
 index_args:

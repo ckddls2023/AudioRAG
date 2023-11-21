@@ -62,6 +62,7 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0, index=No
 
 @torch.no_grad()
 def validate(data_loader, model, epoch, index=None):
+    # Since gather_for_metrics works for tensor, we do not get output results
     model.eval()
     sacrebleu = evaluate.load("sacrebleu")
     meteor = evaluate.load("meteor")
@@ -70,7 +71,6 @@ def validate(data_loader, model, epoch, index=None):
     unwrapped_model = accelerator.unwrap_model(model)
     gen_captions = []
     ref_captions = []
-    file_names_all = []
     retr_texts = None
     retr_audios = None
     for i, batch_data in tqdm(enumerate(data_loader), total=len(data_loader)):
@@ -83,10 +83,18 @@ def validate(data_loader, model, epoch, index=None):
             if retr_texts is None:
                 retr_texts = [[caption[0] for caption in caption_dict]]
             output = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_texts=retr_texts)
-            gen_captions.extend(output)
-            # print(output)
-        ref_captions.extend(caption_dict)
-        file_names_all.extend(audio_names)
+        output = accelerator.pad_across_processes(output, dim=1, pad_index=2) # 2==eos, 1==''
+        gathered_output = accelerator.gather_for_metrics((output))
+        gen_caption = unwrapped_model.tokenizer.batch_decode(gathered_output, skip_special_tokens=True)
+        gen_captions.extend(gen_caption)
+        flattend_captions = [caption for caption_list in caption_dict for caption in caption_list]
+        ref_caption_ids = unwrapped_model.tokenizer(flattend_captions, padding='longest', truncation=True, return_tensors="pt")["input_ids"].to(accelerator.device)
+        ref_caption_ids = accelerator.pad_across_processes(ref_caption_ids, dim=1, pad_index=2)
+        gathered_ref_caption_ids = accelerator.gather_for_metrics((ref_caption_ids))
+        flattend_ref_caption = unwrapped_model.tokenizer.batch_decode(gathered_ref_caption_ids, skip_special_tokens=True)
+        ref_caption = [flattend_ref_caption[i:i + 5] for i in range(0, len(flattend_ref_caption), 5)]
+        ref_captions.extend(ref_caption)
+
     sacrebleu_score = sacrebleu.compute(predictions=gen_captions, references=ref_captions)
     meteor_score = meteor.compute(predictions=gen_captions, references=ref_captions)
     tokenizer = CocoTokenizer(gen_captions, ref_captions)
@@ -110,7 +118,7 @@ def validate(data_loader, model, epoch, index=None):
 def main():
     config = get_config()
     setup_seed(config.seed)
-    exp_name = config.exp_name + f"lr_{config.optim_args.lr}_seed_{config.seed}"
+    exp_name = config.exp_name + "_" + config.model_args.align.model_name + f"_lr_{config.optim_args.lr}_seed_{config.seed}"
     accelerator.init_trackers(
         project_name="audio-captioning",
         config=OmegaConf.to_container(config, resolve=True, throw_on_missing=True),
@@ -126,7 +134,7 @@ def main():
     warmup_steps = int(len(train_dataloader)*config.training.warmup_epochs/accelerator.gradient_accumulation_steps)
     train_steps = int(len(train_dataloader)*config.training.epochs/accelerator.gradient_accumulation_steps)
     scheduler = transformers.get_cosine_schedule_with_warmup(optimizer, warmup_steps, train_steps)
-    train_dataloader, model, optimizer, scheduler = accelerator.prepare(train_dataloader, model, optimizer, scheduler)
+    train_dataloader, val_dataloader, model, optimizer, scheduler = accelerator.prepare(train_dataloader, val_dataloader, model, optimizer, scheduler)
     spiders = []
     index = None
     if config.training.use_retrieval:
@@ -139,7 +147,7 @@ def main():
     if accelerator.state.mixed_precision == "no": # Ampere, Hopper
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-    if config.training.eval and accelerator.is_main_process: # Load checkpoint & Eval only,
+    if config.training.eval: # Load checkpoint & Eval only,
         metrics = validate(val_dataloader, model, 0, index)
         accelerator.print(metrics)
         accelerator.end_training()
@@ -147,12 +155,12 @@ def main():
     for epoch in range(1, config.training.epochs + 1): # 1~10
         train_statics = train(model, train_dataloader, optimizer, scheduler, epoch, config.training.clip_grad, index)
         accelerator.print(train_statics)
-        if accelerator.is_main_process:
-            metrics = validate(val_dataloader, model, epoch, index)
-            spiders.append(metrics["spider"])
-            if metrics["spider"] >= max(spiders):
-                unwrapped_model = accelerator.unwrap_model(model)
-                unwrapped_model.save_ckpt(config.training.output_path)
+        metrics = validate(val_dataloader, model, epoch, index)
+        accelerator.print(metrics)
+        spiders.append(metrics["spider"])
+        if metrics["spider"] >= max(spiders):
+            unwrapped_model = accelerator.unwrap_model(model)
+            unwrapped_model.save_ckpt(config.training.output_path)
         accelerator.wait_for_everyone()
     accelerator.end_training()
 

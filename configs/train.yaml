@@ -1,5 +1,4 @@
-exp_name: 'pretrain'
-device: "cuda"
+exp_name: 'train'
 seed: 20
 train_jsons: [
   'data/json_files/AudioSet/train.json',
