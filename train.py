@@ -131,8 +131,10 @@ def main():
     index = None
     if config.training.use_retrieval:
         index = RetrievalIndex(
-            n_probe=16, index_path=config.index_args.index_save_path, top_k=config.index_args.top_k,
-            device=accelerator.device, downcast=accelerator.state.mixed_precision
+            n_probe=16,
+            index_path=config.index_args.index_save_path,
+            top_k=config.index_args.top_k,
+            device=accelerator.device
         )
     if accelerator.state.mixed_precision == "no": # Ampere, Hopper
         torch.backends.cuda.matmul.allow_tf32 = True

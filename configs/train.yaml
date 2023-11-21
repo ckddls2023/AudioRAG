@@ -73,7 +73,6 @@ training:
   use_retrieval: True
 
 index_args:
-  index_save_path: "./data/index"
-  index_types: ["audio", "text"]
+  index_save_path: "./data/index/audio_faiss_index.bin"
   top_k: 2
   query_mode: "audio2audio"

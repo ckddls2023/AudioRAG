@@ -177,7 +177,7 @@ class CLAP2LLAMA(nn.Module):
         retr_audio_embeds = []
         if retr_audios is not None:
             for retr_audio, retr_text in zip(retr_audios, retr_texts):
-                retr_embed = self.forward_encoder(retr_audio, retr_text)
+                retr_embed, _ = self.forward_encoder(retr_audio, retr_text)
                 retr_audio_embeds.append(retr_embed)
         output = self.forward_decoder(audio_embed, text, retr_audio_embeds, retr_texts)
         if loss is not None:
@@ -223,7 +223,7 @@ class CLAP2LLAMA(nn.Module):
             if retr_audios is not None:
                 retr_audio_embeds = []
                 for retr_audio, retr_text in zip(retr_audios, retr_texts):
-                    retr_embed = self.forward_encoder(retr_audio, retr_text)
+                    retr_embed, loss = self.forward_encoder(retr_audio, retr_text)
                     retr_audio_embeds.append(retr_embed)
                 for retr_audio_embed, retr_text in zip(retr_audio_embeds, retr_texts):
                     input_ids, attn_mask = self.prepare_text_input(retr_text, input_embeds.device)
