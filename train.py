@@ -38,7 +38,7 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0, index=No
     start_time = time.time()
     retr_texts = None
     retr_audios = None
-    for batch_id, (audio, text, _) in tqdm(enumerate(dataloader), total=len(dataloader)):
+    for batch_id, (audio, text, _) in {pbar := tqdm(enumerate(dataloader), total=len(dataloader))}:
         with accelerator.accumulate(model):
             if index:  # RetrieVve audio and texts
                 _, _, retr_texts, retr_audios = index.get_nns(audio)
@@ -53,6 +53,7 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0, index=No
             optimizer.step()
             scheduler.step()
         epoch_loss.update(output["loss"].cpu().item())
+        pbar.set_description(f"loss: {epoch_loss.avg}")
     elapsed_time = time.time() - start_time
     accelerator.log({"loss": epoch_loss.avg, "epoch": epoch})
     return {
@@ -92,7 +93,7 @@ def validate(data_loader, model, epoch, index=None):
         ref_caption_ids = accelerator.pad_across_processes(ref_caption_ids, dim=1, pad_index=2)
         gathered_ref_caption_ids = accelerator.gather_for_metrics((ref_caption_ids))
         flattend_ref_caption = unwrapped_model.tokenizer.batch_decode(gathered_ref_caption_ids, skip_special_tokens=True)
-        ref_caption = [flattend_ref_caption[i:i + 5] for i in range(0, len(flattend_ref_caption), 5)]
+        ref_caption = [flattend_ref_caption[i:i + 5] for i in range(0, len(flattend_ref_caption), 5)] # Hard coded....
         ref_captions.extend(ref_caption)
 
     sacrebleu_score = sacrebleu.compute(predictions=gen_captions, references=ref_captions)

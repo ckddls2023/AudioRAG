@@ -4,8 +4,14 @@ export hosts="grs30c"
 export NUM_HOSTS=$(echo $hosts | tr ',' '\n' | wc -l)
 export MASTER_ADDR=$(echo $hosts | tr ',' '\n' | head -n 1)
 export MASTER_PORT=29500
-# Parse CUDA_VISIBLE_DEVICES to get the number of GPUs
-NUM_GPUS=$(echo $CUDA_VISIBLE_DEVICES | awk -F, '{print NF}')
+if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
+    # If not set, use nvidia-smi to get the number of GPUs
+    NUM_GPUS=$(nvidia-smi -L | wc -l)
+else
+    # If set, count the number of GPUs in CUDA_VISIBLE_DEVICES
+    NUM_GPUS=$(echo $CUDA_VISIBLE_DEVICES | awk -F, '{print NF}')
+fi
+
 
 accelerate launch --num_processes $NUM_GPUS --num_machines $NUM_HOSTS --multi_gpu --mixed_precision bf16 --machine_rank 0 --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT train.py --config configs/pretrain.yaml
 
