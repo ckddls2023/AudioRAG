@@ -13,8 +13,7 @@ def load_caption_wav_mapping(csv_path):
     return df['caption'], df['wav_path']
     
 class RetrievalIndex:
-    def __init__(self, n_probe=16, index_path="./data/index", top_k=3, query_mode="audio2audio", device=None, downcast=""):
-        
+    def __init__(self, n_probe=16, index_path="./data/index", top_k=3, query_mode="audio2audio", device=None, downcast="", use_gpu=False):
         self.datastore = {
             "audio2text": faiss.read_index(f"{index_path}/text_faiss_index.bin"),
             "audio2audio": faiss.read_index(f"{index_path}/audio_faiss_index.bin")
@@ -27,6 +26,7 @@ class RetrievalIndex:
         self.clap = CLAP_Module(enable_fusion=True)  # 615M
         self.clap.load_ckpt()
         self.clap.eval()
+        self.clap = self.clap.to(device)
         self.top_k = top_k
         self.query_mode = query_mode
         self.device = device
@@ -38,7 +38,7 @@ class RetrievalIndex:
         self.dtype = dtype_map[downcast]
 
         # 보류
-        if device: # use_gpu
+        if use_gpu: # use_gpu
             co = faiss.GpuMultipleClonerOptions()
             co.useFloat16 = True
             co.useFloat16CoarseQuantizer = True
@@ -46,12 +46,11 @@ class RetrievalIndex:
             co.indicesOptions = faiss.INDICES_32_BIT
             co.verbose = True
             co.shard = False  # the replicas will be made "manually"
-            res = [faiss.StandardGpuResources() for i in range(faiss.num_gpus())]
+            res = [faiss.StandardGpuResources() for i in range(faiss.get_num_gpus())]
             self.datastore["audio2text"] = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore["audio2text"], co)
             self.datastore["audio2audio"] = faiss.index_cpu_to_gpu_multiple_py(res, self.datastore["audio2audio"], co)
             faiss.GpuParameterSpace().set_index_parameter(self.datastore["audio2text"], 'nprobe', n_probe)
             faiss.GpuParameterSpace().set_index_parameter(self.datastore["audio2audio"], 'nprobe', n_probe)
-            self.clap = self.clap.to(device)
 
     def is_index_trained(self) -> bool:
         return all(index.is_trained for index in self.datastore.values())
@@ -62,7 +61,7 @@ class RetrievalIndex:
             text_embed = self.clap.get_text_embedding(samples, use_tensor=True)
             return text_embed
         else:
-            audio_embed = self.clap.get_audio_embedding_from_data(x=samples, use_tensor=True)  # B, 768
+            audio_embed = self.clap.get_audio_embedding_from_data(x=samples, use_tensor=True)
             return audio_embed
 
     def get_nns(self, queries):

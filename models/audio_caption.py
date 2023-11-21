@@ -91,6 +91,7 @@ class CLAP2LLAMA(nn.Module):
         self.freeze_lm = args.freeze_lm
 
         # Freeze all CLAP parameters
+        self.decoder.gradient_checkpointing_enable()
         if args.freeze_am:
             for p in self.encoder.parameters():
                 p.requires_grad = False
@@ -123,7 +124,6 @@ class CLAP2LLAMA(nn.Module):
             self.decoder.base_model.model.lm_head.original_module.weight.requires_grad = False
             self.decoder.print_trainable_parameters()
 
-        self.decoder.gradient_checkpointing_enable()
 
     def forward_encoder(self, audios, text=None):
         outputs = self.encoder(audios).last_hidden_state
@@ -183,8 +183,7 @@ class CLAP2LLAMA(nn.Module):
             for retr_audio_embed, retr_text in zip(retr_audio_embeds, retr_texts):
                 retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_text, audio_embed.device)
                 retr_input_embeds = torch.cat((retr_audio_embed, self.get_decoder_embeddings()(retr_input_ids)), dim=1)
-                shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(retr_input_ids, retr_attn_mask,
-                                                                               retr_audio_embed.shape[1])
+                shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(retr_input_ids, retr_attn_mask, retr_audio_embed.shape[1])
                 input_embeds = torch.cat((retr_input_embeds, input_embeds), dim=1)
                 shifted_input_ids = torch.cat((shifted_retr_ids, shifted_input_ids), dim=1)
                 shifted_attn_mask = torch.cat((shifted_retr_mask, shifted_attn_mask), dim=1)
@@ -230,10 +229,10 @@ class CLAP2LLAMA(nn.Module):
         # TODO : Instruction tuning? Or Task identifier?
         # TODO : Prefix Tuning? Refer to MINI-GPT5, task adaption or fusion in later context, REVEAL
         with torch.no_grad():
-            if retr_texts is not None:  # Suppose we only test alignment
-                text = retr_texts[0]  # Currently suppose only top-1 used, since encoder length is also important
-            input_embeds = self.forward_encoder(audio, text)
+            # if retr_texts is not None:  # Suppose we only test alignment
+            #     text = retr_texts[0]  # Currently suppose only top-1 used, since encoder length is also important
             # input_embeds, loss = self.forward_encoder(audio, text) # Only for LGTM, dict type will be better...
+            input_embeds = self.forward_encoder(audio, text)
             batch_size, seq_length, _ = input_embeds.shape
             shifted_attn_mask = input_embeds.new_zeros((batch_size, seq_length)).long()
             shifted_attn_mask[:, :] = 1
@@ -268,11 +267,6 @@ if __name__ == "__main__":
     text_data = "Wind and a man speaking are heard, accompanied by buzzing and ticking."
     audio_data = audio_data.reshape(1, -1)  # Make it (1,T) or (N,T)
     audio_data = torch.tensor(audio_data).to("cuda")
-
-    audio_caption_model = CLAP2GPT2().to("cuda")
-    output = audio_caption_model(audio_data, text_data)
-    print(f"loss : {output['loss']}")
-    print(f"logits : {output['logits'].shape}")  # logits : torch.Size([1, 15, 50257])
 
     audio_caption_model = CLAP2LLAMA().to("cuda")
     output = audio_caption_model(audio_data, text_data)

@@ -28,7 +28,7 @@ audio_args:
 
 data_args:
   dataset: "Clotho"
-  batch_size: 16
+  batch_size: 2
   num_workers: 8
 
 model_args:

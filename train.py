@@ -45,7 +45,7 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0, index=No
             optimizer.zero_grad()
             step = len(dataloader) * (epoch - 1) + batch_id
             with accelerator.autocast():
-                output = model(audio, text, retr_texts, retr_audios)
+                output = model(audio, text, retr_audios=retr_audios, retr_texts=retr_texts)
             accelerator.backward(output["loss"])
             if accelerator.sync_gradients:
                 accelerator.clip_grad_norm_(model.parameters(), max_grad) # 1.0
@@ -133,6 +133,9 @@ def main():
             n_probe=16, index_path=config.index_args.index_save_path, top_k=config.index_args.top_k,
             device=accelerator.device, downcast=accelerator.state.mixed_precision
         )
+    if accelerator.state.mixed_precision == "no": # Ampere, Hopper
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     if config.training.eval and accelerator.is_main_process: # Load checkpoint & Eval only,
         metrics = validate(val_dataloader, model, 0, index)
         accelerator.print(metrics)
