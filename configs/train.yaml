@@ -3,7 +3,6 @@ device: "cuda"
 seed: 20
 train_jsons: [
   'data/json_files/AudioSet/train.json',
-  'data/json_files/Clotho/train.json',
 ]
 val_jsons: [
   "data/json_files/AudioSet/val.json",
@@ -25,14 +24,14 @@ audio_args:
 
 data_args:
   dataset: "Clotho"
-  batch_size: 16
+  batch_size: 8
   num_workers: 4
 
 model_args:
   name: "CLAP2LLAMA"
   freeze_am: True
-  freeze_lm: False
-  checkpoint_path: "./pretrained_models/pretrained_MLP/"
+  freeze_lm: True
+  checkpoint_path: "./pretrained_models/pretrained_LGTM/"
 
 # lr from wavcaps, linear scale lr
 optim_args:
@@ -45,14 +44,14 @@ optim_args:
 
 training:
   warmup_epochs: 2
-  epochs: 10
+  epochs: 20
   clip_grad: 2
   output_path: "./finetuned_models/audio_caption/"
-  eval: False
+  eval: True
   use_retrieval: True
 
 index_args:
   index_save_path: "./data/index"
   index_types: ["audio", "text"]
-  top_k: 2
+  top_k: 3
   query_mode: "audio2audio"

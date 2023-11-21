@@ -1,5 +1,4 @@
 import argparse
-import warnings
 import os
 import sys
 import math
@@ -19,8 +18,7 @@ from models.audio_caption import CLAP2LLAMA, FrozenArgs
 import evaluate
 from metrics import SpiceMetric, CocoTokenizer, CiderMetric
 
-warnings.simplefilter("ignore", UserWarning)
-ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True, static_graph=False)
+ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
 accelerator = Accelerator(gradient_accumulation_steps=8, log_with="wandb", kwargs_handlers=[ddp_kwargs])
 
 
@@ -41,11 +39,11 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0, index=No
     for batch_id, (audio, text, _) in tqdm(enumerate(dataloader), total=len(dataloader)):
         with accelerator.accumulate(model):
             if index:  # RetrieVve audio and texts
-                _, _, retr_texts, retr_audios = index.get_nns(audio)
+                _, _, retr_texts, retr_audios = index.get_nns(audio, accelerator.device)
             optimizer.zero_grad()
             step = len(dataloader) * (epoch - 1) + batch_id
             with accelerator.autocast():
-                output = model(audio, text, retr_texts, retr_audios)
+                output = model(audio, text)
             accelerator.backward(output["loss"])
             if accelerator.sync_gradients:
                 accelerator.clip_grad_norm_(model.parameters(), max_grad) # 1.0
@@ -76,15 +74,11 @@ def validate(data_loader, model, epoch, index=None):
     for i, batch_data in tqdm(enumerate(data_loader), total=len(data_loader)):
         audio, caption_dict, audio_names = batch_data
         if index:  # RetrieVve pair of audio and texts
-            _, _, retr_texts, retr_audios = index.get_nns(audio)
+            _, _, retr_texts, retr_audios = index.get_nns(audio, accelerator.device)
         with accelerator.autocast():
-            # print([[caption[0] for caption in caption_dict]])
-            # print(retr_texts[0])
-            if retr_texts is None:
-                retr_texts = [[caption[0] for caption in caption_dict]]
-            output = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_texts=retr_texts)
+            retr_texts = [[caption[0] for caption in caption_dict]] # Caption is list of 5 captions
+            output = unwrapped_model.generate_caption(audio=audio, retr_texts=retr_texts)
             gen_captions.extend(output)
-            # print(output)
         ref_captions.extend(caption_dict)
         file_names_all.extend(audio_names)
     sacrebleu_score = sacrebleu.compute(predictions=gen_captions, references=ref_captions)
@@ -129,11 +123,8 @@ def main():
     spiders = []
     index = None
     if config.training.use_retrieval:
-        index = RetrievalIndex(
-            n_probe=16, index_path=config.index_args.index_save_path, top_k=config.index_args.top_k,
-            device=accelerator.device, downcast=accelerator.state.mixed_precision
-        )
-    if config.training.eval and accelerator.is_main_process: # Load checkpoint & Eval only,
+        index = RetrievalIndex(n_probe=16, index_path=config.index_args.index_save_path, top_k=config.index_args.top_k)
+    if config.training.eval: # Load checkpoint & Eval only,
         metrics = validate(val_dataloader, model, 0, index)
         accelerator.print(metrics)
         accelerator.end_training()
