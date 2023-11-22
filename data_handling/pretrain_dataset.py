@@ -108,7 +108,7 @@ def pretrain_dataloader(config,
                         global_rank: int = 0,
                         shuffle=True):
     blacklist = None if 'val' in subset else config.blacklist
-    batch_size = 4 if 'val' in subset else config.data_args.batch_size
+    batch_size = 16 if 'val' in subset else config.data_args.batch_size
     dataset = AudioLanguagePretrainDataset(config[subset], config["audio_args"], blacklist, 'train' in subset)
     if bucket:
         sampler = BySequenceLengthSampler(lengths=dataset.lengths,
@@ -120,6 +120,7 @@ def pretrain_dataloader(config,
                           batch_sampler=BySequenceBatchSampler(sampler, batch_size=batch_size, drop_last=False),
                           shuffle=shuffle,
                           pin_memory=True,
+                          drop_last=True,
                           num_workers=config["data_args"]["num_workers"],
                           collate_fn=collate_fn)
     elif is_distributed:

@@ -21,7 +21,7 @@ from metrics import SpiceMetric, CocoTokenizer, CiderMetric
 
 warnings.simplefilter("ignore", UserWarning)
 ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True, static_graph=False)
-accelerator = Accelerator(gradient_accumulation_steps=8, log_with="wandb", kwargs_handlers=[ddp_kwargs])
+accelerator = Accelerator(gradient_accumulation_steps=8, log_with="wandb", kwargs_handlers=[ddp_kwargs], even_batches=True)
 
 
 def get_config():
@@ -88,14 +88,14 @@ def validate(data_loader, model, epoch, index=None):
         gathered_output = accelerator.gather_for_metrics((output))
         gen_caption = unwrapped_model.tokenizer.batch_decode(gathered_output, skip_special_tokens=True)
         gen_captions.extend(gen_caption)
-        flattend_captions = [caption for caption_list in caption_dict for caption in caption_list]
-        ref_caption_ids = unwrapped_model.tokenizer(flattend_captions, padding='longest', truncation=True, return_tensors="pt")["input_ids"].to(accelerator.device)
-        ref_caption_ids = accelerator.pad_across_processes(ref_caption_ids, dim=1, pad_index=2)
-        gathered_ref_caption_ids = accelerator.gather_for_metrics((ref_caption_ids))
-        flattend_ref_caption = unwrapped_model.tokenizer.batch_decode(gathered_ref_caption_ids, skip_special_tokens=True)
-        ref_caption = [flattend_ref_caption[i:i + 5] for i in range(0, len(flattend_ref_caption), 5)] # Hard coded....
-        ref_captions.extend(ref_caption)
-
+        ref_captions.extend(caption_dict)
+    flattend_ref_captions = [caption for caption_list in ref_captions for caption in caption_list]
+    ref_caption_ids = unwrapped_model.tokenizer(flattend_ref_captions, padding='longest', truncation=True, return_tensors="pt")["input_ids"].to(accelerator.device)
+    ref_caption_ids = accelerator.pad_across_processes(ref_caption_ids, dim=1, pad_index=2)
+    gathered_ref_caption_ids = accelerator.gather_for_metrics((ref_caption_ids))
+    flattend_ref_captions = unwrapped_model.tokenizer.batch_decode(gathered_ref_caption_ids, skip_special_tokens=True)
+    ref_captions = [flattend_ref_caption[i:i + 5] for i in range(0, len(flattend_ref_captions), 5)] # Hard coded....
+    gen_captions = gen_captions[:len(ref_captions)] # Due to drop_last wrong behavior, length is different
     sacrebleu_score = sacrebleu.compute(predictions=gen_captions, references=ref_captions)
     meteor_score = meteor.compute(predictions=gen_captions, references=ref_captions)
     tokenizer = CocoTokenizer(gen_captions, ref_captions)
