@@ -87,20 +87,24 @@ def validate(data_loader, model, epoch, index=None):
             if retr_texts is None:
                 retr_texts = [[caption[0] for caption in caption_dict]]
             output = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_texts=retr_texts)
-        output = accelerator.pad_across_processes(output, dim=1, pad_index=2) # 2==eos, 1==''
-        gathered_output = accelerator.gather_for_metrics((output))
-        gen_caption = unwrapped_model.tokenizer.batch_decode(gathered_output, skip_special_tokens=True)
-        gen_captions.extend(gen_caption)
-        ref_captions.extend(caption_dict)
-    flattend_ref_captions = [caption for caption_list in ref_captions for caption in caption_list]
-    ref_caption_ids = unwrapped_model.tokenizer(flattend_ref_captions, padding='longest', truncation=True, return_tensors="pt")["input_ids"].to(accelerator.device)
-    ref_caption_ids = accelerator.pad_across_processes(ref_caption_ids, dim=1, pad_index=2)
-    gathered_ref_caption_ids = accelerator.gather_for_metrics((ref_caption_ids))
-    flattend_ref_captions = unwrapped_model.tokenizer.batch_decode(gathered_ref_caption_ids, skip_special_tokens=True)
-    ref_captions = [flattend_ref_captions[i:i + 5] for i in range(0, len(flattend_ref_captions), 5)] # Hard coded....
+        flattend_ref_captions = [caption for caption_list in caption_dict for caption in caption_list]
+        ref_caption_ids = unwrapped_model.tokenizer(flattend_ref_captions, padding='longest', truncation=True, return_tensors="pt")["input_ids"].to(accelerator.device)
+        ref_caption_ids = accelerator.pad_across_processes(ref_caption_ids, dim=1, pad_index=unwrapped_model.tokenizer.pad_token_id)
+        gathered_ref_caption_ids = accelerator.gather_for_metrics(ref_caption_ids)
+        flattend_ref_captions = unwrapped_model.tokenizer.batch_decode(gathered_ref_caption_ids, skip_special_tokens=True)
+        if len(flattend_ref_captions) % 5 == 0: # drop last batch
+            output = accelerator.pad_across_processes(output, dim=1, pad_index=unwrapped_model.tokenizer.pad_token_id) 
+            gathered_output = accelerator.gather_for_metrics((output))
+            gen_caption = unwrapped_model.tokenizer.batch_decode(gathered_output, skip_special_tokens=True)
+            gen_captions.extend(gen_caption)
+            ref_captions.extend([flattend_ref_captions[i:i + 5] for i in range(0, len(flattend_ref_captions), 5)])
+    print(f"gen_captions : {len(gen_captions)}")
+    print(f"ref_captions : {len(ref_captions)}")
     min_length = min(len(gen_captions),len(ref_captions))
     gen_captions = gen_captions[:min_length] # Due to drop_last wrong behavior, length is different
     ref_captions = ref_captions[:min_length] # Due to drop_last wrong behavior, length is different
+    print(gen_captions[:10])
+    print(ref_captions[:10])
     sacrebleu_score = sacrebleu.compute(predictions=gen_captions, references=ref_captions)
     meteor_score = meteor.compute(predictions=gen_captions, references=ref_captions)
     tokenizer = CocoTokenizer(gen_captions, ref_captions)

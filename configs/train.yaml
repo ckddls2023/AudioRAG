@@ -31,7 +31,7 @@ data_args:
 model_args:
   name: "CLAP2LLAMA"
   freeze_am: True
-  freeze_lm: False
+  freeze_lm: True
   checkpoint_path: "./pretrained_models/pretrained_MLP/"
   encoder:
     model_name: "CLAPAudioEncoder"
@@ -68,8 +68,8 @@ training:
   epochs: 10
   clip_grad: 2
   output_path: "./finetuned_models/audio_caption/"
-  eval: False
-  use_retrieval: True
+  eval: True
+  use_retrieval: False
 
 index_args:
   index_save_path: "./data/index/audio_faiss_index.bin"
