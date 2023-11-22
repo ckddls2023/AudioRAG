@@ -38,7 +38,9 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0, index=No
     start_time = time.time()
     retr_texts = None
     retr_audios = None
-    for batch_id, (audio, text, _) in {pbar := tqdm(enumerate(dataloader), total=len(dataloader))}:
+    start_time = time.time()
+    for batch_id, (audio, text, _) in enumerate(pbar := tqdm(dataloader, total=len(dataloader))):
+        iter_time = time.time() - start_time
         with accelerator.accumulate(model):
             if index:  # RetrieVve audio and texts
                 _, _, retr_texts, retr_audios = index.get_nns(audio)
@@ -53,7 +55,8 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0, index=No
             optimizer.step()
             scheduler.step()
         epoch_loss.update(output["loss"].cpu().item())
-        pbar.set_description(f"loss: {epoch_loss.avg}")
+        pbar.set_description(f"loss: {epoch_loss.avg}, data: {iter_time}")
+        start_time = time.time()
     elapsed_time = time.time() - start_time
     accelerator.log({"loss": epoch_loss.avg, "epoch": epoch})
     return {
