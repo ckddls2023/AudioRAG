@@ -94,8 +94,10 @@ def validate(data_loader, model, epoch, index=None):
     ref_caption_ids = accelerator.pad_across_processes(ref_caption_ids, dim=1, pad_index=2)
     gathered_ref_caption_ids = accelerator.gather_for_metrics((ref_caption_ids))
     flattend_ref_captions = unwrapped_model.tokenizer.batch_decode(gathered_ref_caption_ids, skip_special_tokens=True)
-    ref_captions = [flattend_ref_caption[i:i + 5] for i in range(0, len(flattend_ref_captions), 5)] # Hard coded....
-    gen_captions = gen_captions[:len(ref_captions)] # Due to drop_last wrong behavior, length is different
+    ref_captions = [flattend_ref_captions[i:i + 5] for i in range(0, len(flattend_ref_captions), 5)] # Hard coded....
+    min_length = min(len(gen_captions),len(ref_captions))
+    gen_captions = gen_captions[:min_length] # Due to drop_last wrong behavior, length is different
+    ref_captions = ref_captions[:min_length] # Due to drop_last wrong behavior, length is different
     sacrebleu_score = sacrebleu.compute(predictions=gen_captions, references=ref_captions)
     meteor_score = meteor.compute(predictions=gen_captions, references=ref_captions)
     tokenizer = CocoTokenizer(gen_captions, ref_captions)

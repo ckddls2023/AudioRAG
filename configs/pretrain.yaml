@@ -71,7 +71,7 @@ training:
   epochs: 5
   clip_grad: 2
   output_path: "./pretrained_models/audio_caption/"
-  eval: True
+  eval: False
   use_retrieval: False
 
 index_args:
