@@ -36,10 +36,10 @@ class LGTM(nn.Module):
         self.token_merger = BertLMHeadModel(config=config)   # cross-attention with audio token
         self.token_merger.cls = None
         self.token_merger.bert.embeddings.word_embeddings = None
-        self.token_merger.bert.embeddings.position_embeddings = None
-        for layer in self.token_merger.bert.encoder.layer:
-            layer.output = None
-            layer.intermediate = None
+        #self.token_merger.bert.embeddings.position_embeddings = None
+        #for layer in self.token_merger.bert.encoder.layer:
+        #    layer.output = None
+        #    layer.intermediate = None
         self.temperature = 0.07
 
     def forward(self, audio_embeds, text):

@@ -3,7 +3,7 @@
 export hosts="grs30c"
 export NUM_HOSTS=$(echo $hosts | tr ',' '\n' | wc -l)
 export MASTER_ADDR=$(echo $hosts | tr ',' '\n' | head -n 1)
-export MASTER_PORT=29500
+export MASTER_PORT=29502
 if [ -z "$CUDA_VISIBLE_DEVICES" ]; then
     # If not set, use nvidia-smi to get the number of GPUs
     NUM_GPUS=$(nvidia-smi -L | wc -l)

@@ -82,8 +82,6 @@ def validate(data_loader, model, epoch, index=None):
         if index:  # RetrieVve pair of audio and texts
             _, _, retr_texts, retr_audios = index.get_nns(audio)
         with accelerator.autocast():
-            # print([[caption[0] for caption in caption_dict]])
-            # print(retr_texts[0])
             if retr_texts is None:
                 retr_texts = [[caption[0] for caption in caption_dict]]
             output = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_texts=retr_texts)
@@ -98,13 +96,9 @@ def validate(data_loader, model, epoch, index=None):
             gen_caption = unwrapped_model.tokenizer.batch_decode(gathered_output, skip_special_tokens=True)
             gen_captions.extend(gen_caption)
             ref_captions.extend([flattend_ref_captions[i:i + 5] for i in range(0, len(flattend_ref_captions), 5)])
-    print(f"gen_captions : {len(gen_captions)}")
-    print(f"ref_captions : {len(ref_captions)}")
     min_length = min(len(gen_captions),len(ref_captions))
     gen_captions = gen_captions[:min_length] # Due to drop_last wrong behavior, length is different
     ref_captions = ref_captions[:min_length] # Due to drop_last wrong behavior, length is different
-    print(gen_captions[:10])
-    print(ref_captions[:10])
     sacrebleu_score = sacrebleu.compute(predictions=gen_captions, references=ref_captions)
     meteor_score = meteor.compute(predictions=gen_captions, references=ref_captions)
     tokenizer = CocoTokenizer(gen_captions, ref_captions)
@@ -147,6 +141,7 @@ def main():
     train_dataloader, val_dataloader, model, optimizer, scheduler = accelerator.prepare(train_dataloader, val_dataloader, model, optimizer, scheduler)
     spiders = []
     index = None
+    save_ckpt = True
     if config.training.use_retrieval:
         index = RetrievalIndex(
             n_probe=16,
@@ -164,11 +159,12 @@ def main():
         sys.exit()
     for epoch in range(1, config.training.epochs + 1): # 1~10
         train_statics = train(model, train_dataloader, optimizer, scheduler, epoch, config.training.clip_grad, index)
-        accelerator.print(train_statics)
-        metrics = validate(val_dataloader, model, epoch, index)
-        accelerator.print(metrics)
-        spiders.append(metrics["spider"])
-        if metrics["spider"] >= max(spiders):
+        if config.training.validate: # Load checkpoint & Eval only,
+            metrics = validate(val_dataloader, model, epoch, index)
+            accelerator.print(metrics)
+            spiders.append(metrics["spider"])
+            save_ckpt = metrics["spider"] >= max(spiders) 
+        if save_ckpt: 
             unwrapped_model = accelerator.unwrap_model(model)
             unwrapped_model.save_ckpt(config.training.output_path)
         accelerator.wait_for_everyone()

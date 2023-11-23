@@ -181,7 +181,7 @@ class CLAP2LLAMA(nn.Module):
                 retr_audio_embeds.append(retr_embed)
         output = self.forward_decoder(audio_embed, text, retr_audio_embeds, retr_texts)
         if loss is not None:
-            output["loss"] += output["loss"] + 0.1 * loss
+            output["loss"] += output["loss"] + 0.05 * loss
         return output
 
     def save_ckpt(self, checkpoint_path):

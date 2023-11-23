@@ -44,10 +44,10 @@ model_args:
     select_feature: "fine_grained_embedding"
     sequence_length: 1024
     hidden_size: 768
-    window_size: 4 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
-    step_size: 4 
+    window_size: 32 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
+    step_size: 32
   align:
-    model_name: "LGTM"
+    model_name: "MLP"
   peft_config:
     r: 8
     lora_alpha: 16
@@ -59,7 +59,7 @@ model_args:
 
 
 optim_args:
-  lr: 1e-3
+  lr: 2e-4
   betas: [0.9, 0.99]
   eps: 1e-8
   momentum: 0.9
@@ -70,8 +70,9 @@ training:
   warmup_epochs: 1
   epochs: 5
   clip_grad: 2
-  output_path: "./pretrained_models/audio_caption/"
+  output_path: "./pretrained_models/audio_caption_32"
   eval: False
+  validate: False
   use_retrieval: False
 
 index_args:
