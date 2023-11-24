@@ -173,6 +173,8 @@ class CLAP2LLAMA(nn.Module):
         return output
 
     def forward(self, audio, text, retr_audios=None, retr_texts=None):
+        if text is None:
+            text = [' '.join(texts) for texts in zip(*retr_texts)] # B,K to B
         audio_embed, loss = self.forward_encoder(audio, text)  # Only for LGTM
         retr_audio_embeds = []
         if retr_audios is not None:
@@ -181,7 +183,7 @@ class CLAP2LLAMA(nn.Module):
                 retr_audio_embeds.append(retr_embed)
         output = self.forward_decoder(audio_embed, text, retr_audio_embeds, retr_texts)
         if loss is not None:
-            output["loss"] += output["loss"] + 0.05 * loss
+            output["loss"] += output["loss"] + 0.1 * loss
         return output
 
     def save_ckpt(self, checkpoint_path):
@@ -194,6 +196,7 @@ class CLAP2LLAMA(nn.Module):
         if self.config.align.model_name == "LGTM":
             torch.save(self.enc_to_dec_proj.audio2text_xattn.state_dict(), checkpoint_path + "audio2text_xattn.bin")
             torch.save(self.enc_to_dec_proj.token_merger.state_dict(), checkpoint_path + "token_merger.bin")
+            torch.save(self.enc_to_dec_proj.projection_head.state_dict(), checkpoint_path + "projection_head.bin")
         if not self.freeze_lm:
             self.decoder.save_pretrained(checkpoint_path)
 
@@ -205,13 +208,12 @@ class CLAP2LLAMA(nn.Module):
         if self.config.align.model_name == "LGTM":
             self.enc_to_dec_proj.audio2text_xattn.load_state_dict(torch.load(checkpoint_path+"audio2text_xattn.bin"))
             self.enc_to_dec_proj.token_merger.load_state_dict(torch.load(checkpoint_path+"token_merger.bin"))
+            self.enc_to_dec_proj.projection_head.load_state_dict(torch.load(checkpoint_path+"projection_head.bin"))
         if not self.freeze_lm and 'finetuned' in checkpoint_path:
             self.decoder = PeftModel.from_pretrained(self.decoder.base_model, checkpoint_path)  # suppose don't use get_peft_model
 
     def generate_caption(self, audio, text=None, retr_audios=None, retr_texts=None, prompt=None):
         r"""Generate audio captions for each audio recording in a batch"""
-        # TODO : Instruction tuning? Or Task identifier?
-        # TODO : Prefix Tuning? Refer to MINI-GPT5, task adaption or fusion in later context, REVEAL
         with torch.no_grad():
             if retr_texts is not None:  # Suppose we only test alignment
                 text = retr_texts[0]  # Currently suppose only top-1 used, since encoder length is also important

@@ -36,11 +36,12 @@ class LGTM(nn.Module):
         self.token_merger = BertLMHeadModel(config=config)   # cross-attention with audio token
         self.token_merger.cls = None
         self.token_merger.bert.embeddings.word_embeddings = None
-        #self.token_merger.bert.embeddings.position_embeddings = None
-        #for layer in self.token_merger.bert.encoder.layer:
-        #    layer.output = None
-        #    layer.intermediate = None
+        self.token_merger.bert.embeddings.position_embeddings = None
+        for layer in self.token_merger.bert.encoder.layer:
+            layer.output = None
+            layer.intermediate = None
         self.temperature = 0.07
+        self.projection_head = nn.Linear(hidden_size, hidden_size, bias=False)
 
     def forward(self, audio_embeds, text):
         # Embed text using T5 encoder
@@ -63,6 +64,7 @@ class LGTM(nn.Module):
             output_attentions=True,
             return_dict=True,
         )
+        audio_text_embeds = output.last_hidden_state
         attention_scores = output.cross_attentions
         attention_score = attention_scores[-1] # Get last layer attention
         attention_score = attention_score.mean(dim=1) # [B,S,T]
@@ -83,9 +85,10 @@ class LGTM(nn.Module):
             return_dict=True,
         )
         # ATC : Audio-Text Contrastive Alignment, add loss as auxilarity loss
-        pooled_text_embeds = torch.mean(text_embeds, dim=1) # [B,H]
-        pooled_audio_embeds = torch.mean(output.last_hidden_state, dim=1) # [B.H]
-        cos_sim = F.cosine_similarity(pooled_audio_embeds[None, :], pooled_text_embeds[:, None], dim=-1)
+        pooled_audio_text_embeds = torch.mean(audio_text_embeds, dim=1) 
+        projected_audio_embeds = self.projection_head(output.last_hidden_state)
+        pooled_audio_embeds = torch.mean(projected_audio_embeds, dim=1) # [B.H]
+        cos_sim = F.cosine_similarity(pooled_audio_text_embeds[None, :], pooled_audio_text_embeds[:, None], dim=-1)
         pos_mask = torch.eye(cos_sim.shape[0], dtype=torch.bool, device=cos_sim.device)
         cos_sim = cos_sim / self.temperature
         nll = -cos_sim[pos_mask] + torch.logsumexp(cos_sim, dim=-1)
