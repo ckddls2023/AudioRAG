@@ -1,6 +1,7 @@
 import json
 import torch
 import librosa
+import random
 import numpy as np
 import ray
 from ray.data import from_items
@@ -10,12 +11,9 @@ from BEATs import BEATs, BEATsConfig
 ray.init()  # Initialize Ray
 
 json_files = [
-  'data/json_files/BBC_Sound_Effects/bbc_final.json',
-  'data/json_files/FreeSound/fsd_final.json',
-  'data/json_files/SoundBible/sb_final.json',
-  'data/json_files/AudioSet_SL/as_final.json',
-  'data/json_files/AudioSet/train.json',
-  'data/json_files/Clotho/train.json',
+  '../data/json_files/AudioSet_SL/as_final.json',
+  '../data/json_files/AudioSet/train.json',
+  '../data/json_files/Clotho/train.json',
 ]
 
 @ray.remote(num_gpus=1)  # Assign one GPU to this actor
@@ -30,53 +28,57 @@ class AudioSetTagPredictor:
         self.model.to(self.device)
 
     def predict(self, batch):
-        wav_list = [record["audio_data"] for record in batch]
-        max_length = max(len(wav) for wav in wav_list)
-        padded_wav_list = []
-        masks = []
-        for wav in wav_list:
-            padded_wav = F.pad(torch.tensor(wav), (0, max_length - len(wav)))
-            padded_wav_list.append(padded_wav)
-            mask = torch.tensor([1] * len(wav) + [0] * (max_length - len(wav)))
-            masks.append(mask)
-        waveforms = torch.stack(padded_wav_list, dim=0)
-        padding_mask = torch.stack(masks, dim=0)
-        waveforms = waveforms.to(self.device)
-        padding_mask = padding_mask.to(self.device)
+        batch_waveforms = batch['waveform'].copy()
+        batch_masks = batch['mask'].copy()
+        waveforms = torch.from_numpy(batch_waveforms).to(self.device)
+        padding_mask = torch.from_numpy(batch_masks).bool().to(self.device)
+        print(waveforms)
         probs = self.model.extract_features(waveforms, padding_mask=padding_mask)[0]
         return probs
 
 def transform_audio(record):
-    audio, _ = librosa.load(record["wav_path"], sr=16000, duration=record["duration"])
-    record["audio_data"] = audio
-    return record
+    max_length = 16000*10
+    waveform, _ = librosa.load(record["audio"], sr=16000, duration=record["duration"])
+    mask = np.ones(max_length, dtype=np.int32)  # 1s for actual data
+    if waveform.shape[-1] > max_length:
+        max_start = waveform.shape[-1] - max_length
+        start = random.randint(0, max_start)
+        waveform = waveform[start: start + max_length]
+    if waveform.shape[-1] < max_length:
+        waveform = np.pad(waveform, (0, max_length - waveform.shape[-1]), mode='constant')
+        mask[waveform.shape[-1]:] = 0
+    return {'waveform': waveform, 'mask': mask}
 
 with open("./audioset-id2label.json", 'r') as file:
     id2label = json.load(file)
+    
+def get_gpu_count():
+    return torch.cuda.device_count()
 
-# Processing each JSON file
+num_gpus = get_gpu_count()
+predictor_actors = [AudioSetTagPredictor.remote('./BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt') for _ in range(num_gpus)]
+
+
 for json_file in json_files:
     
     with open(json_file, 'r') as file:
         data = json.load(file)
     
-    dataset = from_items(data["data"])
+    dataset = from_items(data["data"][:200])
     transformed_dataset = dataset.map(transform_audio)
-    predictor_actor = AudioSetTagPredictor.remote('./BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt')
-    result_dataset = transformed_dataset.map_batches(
-        lambda batch: ray.get(predictor_actor.predict.remote(batch)),
-        batch_format="list",  # since your data is a list of dictionaries
-        num_gpus=1, 
-        batch_size=64
-        )
-    result_list = result_dataset.take_all()
-    predict_results = torch.cat(result_list, dim=0) # (B, K=527)
+    result_refs = []
+    for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=64)):
+        actor = predictor_actors[i % num_gpus]
+        result_refs.append(actor.predict.remote(batch))
+    result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
+    print(result_list)
+    predict_results = torch.cat(result_list, dim=0) # [(B,K), (B,K)...] -> (total_samples, K=527)
     for entry, prediction in zip(data["data"], predict_results):
         top_probs, top_indices = prediction.topk(k=3)
-        top_labels = [id2label[idx.item()] for idx in top_indices]
+        top_labels = [id2label[str(idx.item())] for idx in top_indices]
         entry["tag"] = ', '.join(top_labels)
 
-    with open(json_file, 'w') as file:
-        json.dump(data, file, indent=4)
+    #with open(json_file, 'w') as file:
+    #    json.dump(data, file, indent=4)
 
 print("JSON files have been processed and saved with tags.")
