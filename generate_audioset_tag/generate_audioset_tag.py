@@ -7,6 +7,8 @@ import ray
 from ray.data import from_items
 import torch.nn.functional as F
 from BEATs import BEATs, BEATsConfig
+from models.audiosep import AudioSep
+from utils import get_ss_model
 
 ray.init()  # Initialize Ray
 
@@ -81,3 +83,41 @@ for json_file in json_files:
         json.dump(data, file, indent=4)
 
 print("JSON files have been processed and saved with tags.")
+
+@ray.remote(num_gpus=1)
+class AudioSeparator:
+    def __init__(self, model_name, config_path):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        ss_model = get_ss_model(config_path)
+        self.model = AudioSep.from_pretrained(model_name, ss_model=ss_model)
+        self.model.to(self.device)
+
+    def separate(self, audio_file, text, output_file):
+        # AudioSep processes the audio at 32 kHz sampling rate
+        inference(self.model, audio_file, text, output_file, self.device)
+
+separator_actors = [AudioSeparator.remote("nielsr/audiosep-demo", 'config/audiosep_base.yaml') for _ in range(num_gpus)]
+
+
+for json_file in json_files:
+    with open(json_file, 'r') as file:
+        data = json.load(file)
+
+    # Iterate over each entry and separate audio based on the tag
+    separation_refs = []
+    for i, entry in enumerate(data["data"]):
+        audio_file = entry['audio']
+        tags = entry['tag'].split(', ')
+        output_file = audio_file.replace(".wav", f"_{i}.wav")
+
+        # Select a tag for audio separation, modify as needed
+        text = tags[0] if tags else "unknown"
+
+        # Schedule the audio separation task
+        actor = separator_actors[i % num_gpus]
+        separation_refs.append(actor.separate.remote(audio_file, text, output_file))
+
+    # Wait for all audio separation tasks to complete
+    ray.get(separation_refs)
+
+print("Audio files have been processed and separated based on tags.")
