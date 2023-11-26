@@ -11,9 +11,10 @@ from BEATs import BEATs, BEATsConfig
 ray.init()  # Initialize Ray
 
 json_files = [
-  '../data/json_files/AudioSet_SL/as_final.json',
   '../data/json_files/AudioSet/train.json',
+  '../data/json_files/AudioSet/val.json',
   '../data/json_files/Clotho/train.json',
+  '../data/json_files/Clotho/val.json',
 ]
 
 @ray.remote(num_gpus=1)  # Assign one GPU to this actor
@@ -63,7 +64,7 @@ for json_file in json_files:
     with open(json_file, 'r') as file:
         data = json.load(file)
     
-    dataset = from_items(data["data"])
+    dataset = from_items(data["data"][:200])
     transformed_dataset = dataset.map(transform_audio)
     result_refs = []
     for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=64)):

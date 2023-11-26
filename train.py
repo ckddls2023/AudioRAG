@@ -99,23 +99,24 @@ def validate(data_loader, model, epoch, index=None):
     min_length = min(len(gen_captions),len(ref_captions))
     gen_captions = gen_captions[:min_length] # Due to drop_last wrong behavior, length is different
     ref_captions = ref_captions[:min_length] # Due to drop_last wrong behavior, length is different
-    sacrebleu_score = sacrebleu.compute(predictions=gen_captions, references=ref_captions)
-    meteor_score = meteor.compute(predictions=gen_captions, references=ref_captions)
-    tokenizer = CocoTokenizer(gen_captions, ref_captions)
-    tokens = tokenizer.tokenize()
-    if isinstance(ref_captions, list) and all(isinstance(caption, str) for caption in ref_captions):
-        ref_captions = [[caption] for caption in ref_captions] # List of list, val or test may include 5 captions
-    spice_score = spice.compute(predictions=gen_captions, references=ref_captions, tokens=tokens)
-    cider_score = cider.compute(predictions=gen_captions, references=ref_captions, tokens=tokens)
-    spider_score = 0.5 * (spice_score['average_score'] + cider_score['score'])
-    metrics_all = {
-        "sacrebleu": sacrebleu_score['score'],
-        "meteor": meteor_score['meteor'],
-        "spice": spice_score['average_score'],
-        "cider": cider_score['score'],
-        "spider": spider_score,
-    }
-    accelerator.log(metrics_all)
+    if accelerator.is_main_process:
+        sacrebleu_score = sacrebleu.compute(predictions=gen_captions, references=ref_captions)
+        meteor_score = meteor.compute(predictions=gen_captions, references=ref_captions)
+        tokenizer = CocoTokenizer(gen_captions, ref_captions)
+        tokens = tokenizer.tokenize()
+        if isinstance(ref_captions, list) and all(isinstance(caption, str) for caption in ref_captions):
+            ref_captions = [[caption] for caption in ref_captions] # List of list, val or test may include 5 captions
+        spice_score = spice.compute(predictions=gen_captions, references=ref_captions, tokens=tokens)
+        cider_score = cider.compute(predictions=gen_captions, references=ref_captions, tokens=tokens)
+        spider_score = 0.5 * (spice_score['average_score'] + cider_score['score'])
+        metrics_all = {
+            "sacrebleu": sacrebleu_score['score'],
+            "meteor": meteor_score['meteor'],
+            "spice": spice_score['average_score'],
+            "cider": cider_score['score'],
+            "spider": spider_score,
+        }
+        accelerator.log(metrics_all)
     return metrics_all
 
 
