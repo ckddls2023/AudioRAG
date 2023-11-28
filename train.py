@@ -66,7 +66,6 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0, index=No
 
 @torch.no_grad()
 def validate(data_loader, model, epoch, index=None):
-    # Since gather_for_metrics works for tensor, we do not get output results
     model.eval()
     sacrebleu = evaluate.load("sacrebleu")
     meteor = evaluate.load("meteor")
@@ -74,9 +73,9 @@ def validate(data_loader, model, epoch, index=None):
     cider = CiderMetric()
     unwrapped_model = accelerator.unwrap_model(model)
     gen_captions = []
-    ref_captions = []
     retr_texts = None
     retr_audios = None
+    ref_captions = [captions for (_, captions, _) in data_loader]
     for i, batch_data in tqdm(enumerate(data_loader), total=len(data_loader)):
         audio, caption_dict, audio_names = batch_data
         if index:  # RetrieVve pair of audio and texts
@@ -85,17 +84,10 @@ def validate(data_loader, model, epoch, index=None):
             if retr_texts is None:
                 retr_texts = [[caption[0] for caption in caption_dict]]
             output = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_texts=retr_texts)
-        flattend_ref_captions = [caption for caption_list in caption_dict for caption in caption_list]
-        ref_caption_ids = unwrapped_model.tokenizer(flattend_ref_captions, padding='longest', truncation=True, return_tensors="pt")["input_ids"].to(accelerator.device)
-        ref_caption_ids = accelerator.pad_across_processes(ref_caption_ids, dim=1, pad_index=unwrapped_model.tokenizer.pad_token_id)
-        gathered_ref_caption_ids = accelerator.gather_for_metrics(ref_caption_ids)
-        flattend_ref_captions = unwrapped_model.tokenizer.batch_decode(gathered_ref_caption_ids, skip_special_tokens=True)
-        if len(flattend_ref_captions) % 5 == 0: # drop last batch
-            output = accelerator.pad_across_processes(output, dim=1, pad_index=unwrapped_model.tokenizer.pad_token_id) 
             gathered_output = accelerator.gather_for_metrics((output))
             gen_caption = unwrapped_model.tokenizer.batch_decode(gathered_output, skip_special_tokens=True)
+            print(gen_caption)
             gen_captions.extend(gen_caption)
-            ref_captions.extend([flattend_ref_captions[i:i + 5] for i in range(0, len(flattend_ref_captions), 5)])
     min_length = min(len(gen_captions),len(ref_captions))
     gen_captions = gen_captions[:min_length] # Due to drop_last wrong behavior, length is different
     ref_captions = ref_captions[:min_length] # Due to drop_last wrong behavior, length is different
@@ -156,6 +148,7 @@ def main():
         torch.backends.cudnn.allow_tf32 = True
     if config.training.eval: # Load checkpoint & Eval only,
         validate(val_dataloader, model, 0, index)
+        accelerator.wait_for_everyone()
         accelerator.end_training()
         sys.exit()
     for epoch in range(1, config.training.epochs + 1): # 1~10

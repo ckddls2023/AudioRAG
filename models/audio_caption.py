@@ -23,9 +23,9 @@ class CLAP2LLAMA(nn.Module):
         self.encoder = CLAPAudioTower(self.encoder_config)
         self.decoder = LlamaForCausalLM.from_pretrained("lmsys/vicuna-7b-v1.5")  # v1.5 : LLAMA2 + VICUNA
         self.tokenizer = LlamaTokenizer.from_pretrained("lmsys/vicuna-7b-v1.5", use_fast=False)
-        self.tokenizer.pad_token = self.tokenizer.eos_token  # Bug fix, CLAP needs lower version, but have model.vocab !=tokenizer.vocab
-        # self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-        # self.tokenizer.padding_side = "right"
+        self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        self.tokenizer.padding_side = "right"
+        self.decoder.resize_token_embeddings(len(self.tokenizer))
         self.decoder_config = self.decoder.config
 
         if self.config.align.model_name == "MLP":
@@ -131,6 +131,7 @@ class CLAP2LLAMA(nn.Module):
 
     def forward_encoder(self, audios, text=None):
         outputs = self.encoder(audios).last_hidden_state
+        outputs = outputs / outputs.norm(2, -1).unsqueeze(-1)  # Normalize embedding
         outputs, loss = self.forward_align(outputs, text) # loss is None for MLP, Perceiver, Q-former
         return outputs, loss
 
@@ -238,9 +239,13 @@ class CLAP2LLAMA(nn.Module):
                 attention_mask=shifted_attn_mask,
                 num_beams=2,
                 min_length=0,
+                no_repeat_ngram_size=2,
                 max_length=256,
                 top_p=0.9,
-                repetition_penalty=1.1,
+                do_sample=True,
+                repetition_penalty=1.2,
+                early_stopping=True,
+                eos_token_id=self.tokenizer.eos_token_id
             )
         return outputs
 
