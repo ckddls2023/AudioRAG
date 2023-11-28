@@ -195,9 +195,9 @@ class CLAP2LLAMA(nn.Module):
         if self.config.align.model_name == "Qformer" or self.config.align.model_name == "LGTM":
             torch.save(self.decoder_proj.state_dict(), checkpoint_path + "decoder_proj.bin")
         if self.config.align.model_name == "LGTM":
-            torch.save(self.enc_to_dec_proj.audio2text_xattn.state_dict(), checkpoint_path + "audio2text_xattn.bin")
-            torch.save(self.enc_to_dec_proj.token_merger.state_dict(), checkpoint_path + "token_merger.bin")
-            torch.save(self.enc_to_dec_proj.projection_head.state_dict(), checkpoint_path + "projection_head.bin")
+            full_state_dict = self.enc_to_dec_proj.state_dict()
+            filtered_state_dict = {k: v for k, v in full_state_dict.items() if 'text_encoder' not in k}
+            torch.save(filtered_state_dict, checkpoint_path + "enc_to_dec_proj.bin")
         if not self.freeze_lm:
             self.decoder.save_pretrained(checkpoint_path)
 
@@ -207,9 +207,7 @@ class CLAP2LLAMA(nn.Module):
         if self.config.align.model_name == "Qformer" or self.config.align.model_name == "LGTM":
             self.decoder_proj.load_state_dict(torch.load(checkpoint_path + "decoder_proj.bin"))
         if self.config.align.model_name == "LGTM":
-            self.enc_to_dec_proj.audio2text_xattn.load_state_dict(torch.load(checkpoint_path+"audio2text_xattn.bin"))
-            self.enc_to_dec_proj.token_merger.load_state_dict(torch.load(checkpoint_path+"token_merger.bin"))
-            self.enc_to_dec_proj.projection_head.load_state_dict(torch.load(checkpoint_path+"projection_head.bin"))
+            self.enc_to_dec_proj.load_state_dict(torch.load(checkpoint_path+"enc_to_dec_proj.bin"), strict=False)
         if not self.freeze_lm and 'finetuned' in checkpoint_path:
             self.decoder = PeftModel.from_pretrained(self.decoder.base_model, checkpoint_path)  # suppose don't use get_peft_model
 
