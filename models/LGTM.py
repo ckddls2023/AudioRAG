@@ -40,7 +40,7 @@ class LGTM(nn.Module):
         for layer in self.token_merger.bert.encoder.layer:
             layer.output = None
             layer.intermediate = None
-        self.temperature = 0.07
+        self.temperature = 0.2
         self.projection_head = nn.Linear(hidden_size, hidden_size, bias=False)
         self.audio_query_tokens = nn.Parameter(torch.zeros(1, 64, self.hidden_size))
         self.audio_query_tokens.data.normal_(mean=0.0, std=config.initializer_range)

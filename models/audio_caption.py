@@ -32,7 +32,8 @@ class CLAP2LLAMA(nn.Module):
             modules = [
                 nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size),
                 nn.GELU(),
-                nn.Linear(self.decoder_config.hidden_size, self.decoder_config.hidden_size)
+                nn.Linear(self.decoder_config.hidden_size, self.decoder_config.hidden_size),
+                nn.LayerNorm(self.decoder_config.hidden_size)
             ]
             self.enc_to_dec_proj = nn.Sequential(*modules)
             self.forward_align = self.forward_mlp
@@ -76,9 +77,11 @@ class CLAP2LLAMA(nn.Module):
         # Ours, token merge with langauge guided selection
         if self.config.align.model_name == "LGTM":
             self.enc_to_dec_proj = LGTM(hidden_size=self.encoder_config.hidden_size, num_latents=64)
-            self.decoder_proj = nn.Linear(
-                self.encoder_config.hidden_size, self.decoder_config.hidden_size
-            )
+            modules = [
+                nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size),
+                nn.LayerNorm(self.decoder_config.hidden_size)
+            ]
+            self.decoder_proj = nn.Sequential(*modules)
             self.forward_align = self.forward_lgtm
 
         self.freeze_am = config.freeze_am
@@ -131,7 +134,7 @@ class CLAP2LLAMA(nn.Module):
 
     def forward_encoder(self, audios, text=None):
         outputs = self.encoder(audios).last_hidden_state
-        outputs = outputs / outputs.norm(2, -1).unsqueeze(-1)  # Normalize embedding
+        #outputs = outputs / outputs.norm(2, -1).unsqueeze(-1)  # Normalize embedding
         outputs, loss = self.forward_align(outputs, text) # loss is None for MLP, Perceiver, Q-former
         return outputs, loss
 
