@@ -117,7 +117,8 @@ def validate(data_loader, model, epoch, index=None):
             "spider": spider_score,
         }
         accelerator.log(metrics_all)
-    return metrics_all
+        accelerator.print(metrics_all)
+        return metrics_all
 
 
 def main():
@@ -142,7 +143,7 @@ def main():
     train_dataloader, val_dataloader, model, optimizer, scheduler = accelerator.prepare(train_dataloader, val_dataloader, model, optimizer, scheduler)
     spiders = []
     index = None
-    save_ckpt = True
+    save_ckpt = accelerator.is_main_process
     if config.training.use_retrieval:
         index = RetrievalIndex(
             n_probe=16,
@@ -154,17 +155,16 @@ def main():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
     if config.training.eval: # Load checkpoint & Eval only,
-        metrics = validate(val_dataloader, model, 0, index)
-        accelerator.print(metrics)
+        validate(val_dataloader, model, 0, index)
         accelerator.end_training()
         sys.exit()
     for epoch in range(1, config.training.epochs + 1): # 1~10
         train_statics = train(model, train_dataloader, optimizer, scheduler, epoch, config.training.clip_grad, index)
         if config.training.validate: # Load checkpoint & Eval only,
-            metrics = validate(val_dataloader, model, epoch, index)
-            accelerator.print(metrics)
-            spiders.append(metrics["spider"])
-            save_ckpt = metrics["spider"] >= max(spiders) 
+            validate(val_dataloader, model, epoch, index)
+            if accelerator.is_main_process:
+                spiders.append(metrics["spider"])
+                save_ckpt = metrics["spider"] >= max(spiders) 
         if save_ckpt: 
             unwrapped_model = accelerator.unwrap_model(model)
             unwrapped_model.save_ckpt(config.training.output_path)

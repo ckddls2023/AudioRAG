@@ -106,7 +106,7 @@ def pretrain_dataloader(config,
                         is_distributed: bool = False,
                         num_tasks: int = 0,
                         global_rank: int = 0,
-                        shuffle=True):
+                        shuffle=False):
     blacklist = None if 'val' in subset else config.blacklist
     batch_size = 4 if 'val' in subset else config.data_args.batch_size
     dataset = AudioLanguagePretrainDataset(config[subset], config["audio_args"], blacklist, 'train' in subset)
