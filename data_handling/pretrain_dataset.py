@@ -50,16 +50,23 @@ def load_json_file(files, blacklist=None, train=True):
 
 class AudioLanguagePretrainDataset(Dataset):
 
-    def __init__(self, json_files, audio_config, blacklist=None, train=True):
+    def __init__(self, json_files, audio_config, blacklist=None, train=True, retrieve_map="", top_k=2):
 
         self.json_data = load_json_file(json_files, blacklist, train)
         self.lengths = [item["duration"] for item in self.json_data]
+        self.top_k = top_k
+        self.retrieve_map = {}
+        if retrieve_map:
+            with open(retrieve_map, 'r') as file:
+                self.retrieve_map = json.load(file)
 
         self.sr = audio_config["sr"]
         if audio_config["max_length"] != 0:
             self.max_length = audio_config["max_length"] * self.sr
         else:
             self.max_length = 0
+            
+        self.audio_caption_map = {item["audio"]: item["caption"] for item in self.json_data}
 
         self.audio_cfg = {
             "audio_length": 1024,
@@ -77,17 +84,12 @@ class AudioLanguagePretrainDataset(Dataset):
 
     def __len__(self):
         return len(self.json_data)
-
-    def __getitem__(self, index):
-        item = self.json_data[index]
-        wav_path = item["audio"]
-        duration = item["duration"]
+    
+    def preprocess_waveform(self, wav_path, duration):
         waveform, sr = librosa.load(wav_path, sr=self.sr, duration=duration)
         audio_waveform = int16_to_float32(float32_to_int16(waveform))
         audio_waveform = torch.from_numpy(audio_waveform).float()
         temp_dict = {}
-        if len(audio_waveform) == 0:
-            print(f"wav_path : {wav_path} is empty")
         temp_dict = get_audio_features(
             temp_dict, audio_waveform, 480000,
             data_truncating='fusion',
@@ -95,8 +97,20 @@ class AudioLanguagePretrainDataset(Dataset):
             audio_cfg=self.audio_cfg,
             require_grad=False,
         )
+        return temp_dict
+
+    def __getitem__(self, index):
+        item = self.json_data[index]
+        wav_path = item["audio"]
+        duration = item["duration"]
+        audio_feature = self.preprocess_waveform(wav_path, duration)
         caption = text_preprocess(item["caption"])
-        return temp_dict, caption, wav_path
+        retr_audio_features = []
+        retr_captions = []
+        if wav_path in self.retrieve_map:
+            retr_audio_features = [self.preprocess_waveform(retr_wav_path, duration) for retr_wav_path in self.retrieve_map[wav_path][:self.top_k]]
+            retr_captions = [text_preprocess(self.audio_caption_map[retr_wav_path]) for retr_wav_path in self.retrieve_map[wav_path][:self.top_k]]
+        return audio_feature, caption, wav_path, retr_audio_features, retr_captions
 
 
 def pretrain_dataloader(config,
@@ -106,10 +120,12 @@ def pretrain_dataloader(config,
                         is_distributed: bool = False,
                         num_tasks: int = 0,
                         global_rank: int = 0,
+                        retrieve_map="",
+                        top_k=2,
                         shuffle=False):
     blacklist = None if 'val' in subset else config.blacklist
     batch_size = 4 if 'val' in subset else config.data_args.batch_size
-    dataset = AudioLanguagePretrainDataset(config[subset], config["audio_args"], blacklist, 'train' in subset)
+    dataset = AudioLanguagePretrainDataset(config[subset], config["audio_args"], blacklist, 'train' in subset, retrieve_map, top_k)
     if bucket:
         sampler = BySequenceLengthSampler(lengths=dataset.lengths,
                                           bucket_boundaries=bucket_boundaries,

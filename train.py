@@ -13,14 +13,13 @@ from tqdm import tqdm
 from utils import setup_seed, AverageMeter, decode_output
 import transformers
 from data_handling.pretrain_dataset import pretrain_dataloader
-from data_handling.retrieval_dataset import RetrievalIndex
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from models.audio_caption import CLAP2LLAMA
 import evaluate
 from metrics import SpiceMetric, CocoTokenizer, CiderMetric
 
 warnings.simplefilter("ignore", UserWarning)
-ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True, static_graph=False)
+ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=False, static_graph=False)
 accelerator = Accelerator(gradient_accumulation_steps=8, log_with="wandb", kwargs_handlers=[ddp_kwargs], even_batches=True)
 
 
@@ -32,18 +31,16 @@ def get_config():
     return config
 
 
-def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0, index=None):
+def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0):
     model.train()
     epoch_loss = AverageMeter()
     start_time = time.time()
     retr_texts = None
     retr_audios = None
     start_time = time.time()
-    for batch_id, (audio, text, _) in enumerate(pbar := tqdm(dataloader, total=len(dataloader))):
+    for batch_id, (audio, text, _, retr_audios, retr_texts) in enumerate(pbar := tqdm(dataloader, total=len(dataloader))):
         iter_time = time.time() - start_time
         with accelerator.accumulate(model):
-            if index:  # RetrieVve audio and texts
-                _, _, retr_texts, retr_audios = index.get_nns(audio)
             optimizer.zero_grad()
             step = len(dataloader) * (epoch - 1) + batch_id
             with accelerator.autocast():
@@ -65,7 +62,7 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0, index=No
 
 
 @torch.no_grad()
-def validate(data_loader, model, epoch, index=None):
+def validate(data_loader, model, epoch):
     model.eval()
     sacrebleu = evaluate.load("sacrebleu")
     meteor = evaluate.load("meteor")
@@ -77,11 +74,9 @@ def validate(data_loader, model, epoch, index=None):
     retr_audios = None
     ref_captions = [captions for (_, captions, _) in data_loader]
     for i, batch_data in tqdm(enumerate(data_loader), total=len(data_loader)):
-        audio, caption_dict, audio_names = batch_data
-        if index:  # RetrieVve pair of audio and texts
-            _, _, retr_texts, retr_audios = index.get_nns(audio)
+        audio, caption_dict, audio_names, retr_audios, retr_texts = batch_data
         with accelerator.autocast():
-            if retr_texts is None:
+            if not retr_texts: 
                 retr_texts = [[caption[0] for caption in caption_dict]]
             output = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_texts=retr_texts)
             gathered_output = accelerator.gather_for_metrics((output))
@@ -126,35 +121,27 @@ def main():
     accelerator.gradient_accumulation_steps = config.data_args.global_batch_size // (config.data_args.batch_size*accelerator.state.num_processes)
     if config.model_args.checkpoint_path:
         model.load_ckpt(config.model_args.checkpoint_path)
-    train_dataloader = pretrain_dataloader(config, subset="train_jsons", bucket=False, is_distributed=False,num_tasks=1,global_rank=0,shuffle=True)
-    val_dataloader = pretrain_dataloader(config, subset="val_jsons", bucket=False, is_distributed=False, num_tasks=1,global_rank=0,shuffle=False)
+    train_dataloader = pretrain_dataloader(config, subset="train_jsons", bucket=False, is_distributed=False,num_tasks=1,global_rank=0,shuffle=True,retrieve_map=config.index_args.index_path,top_k=config.index_args.top_k)
+    val_dataloader = pretrain_dataloader(config, subset="val_jsons", bucket=False, is_distributed=False, num_tasks=1,global_rank=0,shuffle=False,retrieve_map=config.index_args.index_path,top_k=config.index_args.top_k)
     optimizer = optim.AdamW(model.parameters(), lr=config.optim_args.lr, betas=config.optim_args.betas, eps=config.optim_args.eps, weight_decay=config.optim_args.weight_decay, fused=False)
     warmup_steps = int(len(train_dataloader)*config.training.warmup_epochs/accelerator.gradient_accumulation_steps)
     train_steps = int(len(train_dataloader)*config.training.epochs/accelerator.gradient_accumulation_steps)
     scheduler = transformers.get_cosine_schedule_with_warmup(optimizer, warmup_steps, train_steps)
     train_dataloader, val_dataloader, model, optimizer, scheduler = accelerator.prepare(train_dataloader, val_dataloader, model, optimizer, scheduler)
     spiders = []
-    index = None
     save_ckpt = accelerator.is_main_process
-    if config.training.use_retrieval:
-        index = RetrievalIndex(
-            n_probe=16,
-            index_path=config.index_args.index_save_path,
-            top_k=config.index_args.top_k,
-            device=accelerator.device
-        )
     if accelerator.state.mixed_precision == "no": # Ampere, Hopper
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
     if config.training.eval: # Load checkpoint & Eval only,
-        validate(val_dataloader, model, 0, index)
+        validate(val_dataloader, model, 0)
         accelerator.wait_for_everyone()
         accelerator.end_training()
         sys.exit()
     for epoch in range(1, config.training.epochs + 1): # 1~10
-        train_statics = train(model, train_dataloader, optimizer, scheduler, epoch, config.training.clip_grad, index)
+        train_statics = train(model, train_dataloader, optimizer, scheduler, epoch, config.training.clip_grad)
         if config.training.validate: # Load checkpoint & Eval only,
-            validate(val_dataloader, model, epoch, index)
+            validate(val_dataloader, model, epoch)
             if accelerator.is_main_process:
                 spiders.append(metrics["spider"])
                 save_ckpt = metrics["spider"] >= max(spiders) 

@@ -73,9 +73,7 @@ training:
   output_path: "./pretrained_models/audio_caption_MLP2/"
   eval: False
   validate: False
-  use_retrieval: False
 
 index_args:
-  index_save_path: "./data/index/audio_faiss_index.bin"
+  index_path: ""
   top_k: 2
-  query_mode: "audio2audio"

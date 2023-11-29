@@ -100,12 +100,11 @@ class AudioCaptionDataModule:
 
 
 def collate_fn(batch):
-    input_dict_list = []
-    text_list = []
-    audio_paths = []
-    for temp_dict, text, audio_path in batch:
-        input_dict_list.append(temp_dict)
-        text_list.append(text)
-        audio_paths.append(audio_path)
-
-    return input_dict_list, text_list, audio_paths
+    audio_features, captions, audio_paths, retr_audio_features, retr_captions = zip(*batch)
+    if retr_audio_features[0]:
+        retr_audio_features = list(map(list, zip(*retr_audio_features))) # B, top_k to top_k, B
+        retr_captions = list(map(list, zip(*retr_captions)))
+    else:
+        retr_audio_features = []
+        retr_captions = []
+    return audio_features, captions, audio_paths, retr_audio_features, retr_captions
