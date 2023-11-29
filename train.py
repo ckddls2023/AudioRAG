@@ -85,7 +85,7 @@ def validate(data_loader, model, epoch, index=None):
                 retr_texts = [[caption[0] for caption in caption_dict]]
             output = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_texts=retr_texts)
             gathered_output = accelerator.gather_for_metrics((output))
-            gen_caption = unwrapped_model.tokenizer.batch_decode(gathered_output, skip_special_tokens=True)
+            gen_caption = unwrapped_model.tokenizer.batch_decode(gathered_output, skip_special_tokens=False)
             print(gen_caption)
             gen_captions.extend(gen_caption)
     min_length = min(len(gen_captions),len(ref_captions))

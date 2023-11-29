@@ -6,12 +6,13 @@ from omegaconf import OmegaConf
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import GPT2LMHeadModel, GPT2Tokenizer, LlamaForCausalLM, LlamaTokenizer, GPT2Config, LlamaConfig
+from transformers import GPT2LMHeadModel, GPT2Tokenizer, LlamaForCausalLM, LlamaTokenizer, GPT2Config, LlamaConfig, GenerationConfig
 from peft import LoraConfig, TaskType, IA3Config, get_peft_model, get_peft_model_state_dict, PeftModel, PeftConfig
 from models.audio_encoder import CLAPAudioTower, CLAPEncoderConfig, HTSATAudioTower, HTSATEncoderConfig
 from models.flamingo_pytorch import PerceiverResampler
 from models.Qformer import *
 from models.LGTM import *
+from transformers import StoppingCriteria, StoppingCriteriaList
 
 
 class CLAP2LLAMA(nn.Module):
@@ -22,11 +23,30 @@ class CLAP2LLAMA(nn.Module):
         self.encoder_config = CLAPEncoderConfig.from_dict(OmegaConf.to_container(config.encoder, resolve=True))
         self.encoder = CLAPAudioTower(self.encoder_config)
         self.decoder = LlamaForCausalLM.from_pretrained("lmsys/vicuna-7b-v1.5")  # v1.5 : LLAMA2 + VICUNA
-        self.tokenizer = LlamaTokenizer.from_pretrained("lmsys/vicuna-7b-v1.5", use_fast=False)
+        self.tokenizer = LlamaTokenizer.from_pretrained("lmsys/vicuna-7b-v1.5", use_fast=False, add_eos_token=True,add_bos_token=False)
+        #self.tokenizer.pad_token_id = 0  # unk. we want this to be different from the eos token
+        self.generation_config, unused_kwargs = GenerationConfig.from_pretrained("lmsys/vicuna-7b-v1.5", max_new_tokens=200, return_unused_kwargs=True)
         self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-        self.tokenizer.padding_side = "right"
         self.decoder.resize_token_embeddings(len(self.tokenizer))
+        self.decoder.config.pad_token_id = self.tokenizer.pad_token_id
+        self.tokenizer.padding_side = "right"
         self.decoder_config = self.decoder.config
+        
+        stop_token_ids = [torch.LongTensor([29871]).to("cuda")]
+
+        # define custom stopping criteria object
+        class StopOnTokens(StoppingCriteria):
+            def __init__(self, stop_token_ids):
+                super(StopOnTokens, self).__init__()
+                self.stop_token_ids = stop_token_ids
+
+            def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+                for stop_ids in self.stop_token_ids:
+                    if torch.eq(input_ids[0][-len(stop_ids):], stop_ids).all():
+                        return True
+                return False
+        self.stopping_criteria = StoppingCriteriaList([StopOnTokens(stop_token_ids)])
+
 
         if self.config.align.model_name == "MLP":
             modules = [
@@ -238,16 +258,10 @@ class CLAP2LLAMA(nn.Module):
             outputs = self.decoder.generate(
                 inputs_embeds=input_embeds,
                 attention_mask=shifted_attn_mask,
-                num_beams=2,
-                min_length=0,
-                no_repeat_ngram_size=2,
-                max_length=256,
-                top_p=0.9,
-                do_sample=True,
-                repetition_penalty=1.2,
-                early_stopping=True,
-                eos_token_id=self.tokenizer.eos_token_id
+                generation_config=self.generation_config,
+                #stopping_criteria=self.stopping_criteria
             )
+            print(outputs)
         return outputs
 
 

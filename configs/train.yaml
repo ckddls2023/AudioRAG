@@ -32,7 +32,7 @@ model_args:
   name: "CLAP2LLAMA"
   freeze_am: True
   freeze_lm: True
-  checkpoint_path: "./pretrained_models/pretrained_MLP_32/"
+  checkpoint_path: "./pretrained_models/pretrained_LGTM/"
   encoder:
     model_name: "CLAPAudioEncoder"
     pretrained: True
@@ -41,10 +41,10 @@ model_args:
     select_feature: "fine_grained_embedding"
     sequence_length: 1024
     hidden_size: 768
-    window_size: 32 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
-    step_size: 32
+    window_size: 4 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
+    step_size: 4
   align:
-    model_name: "MLP"
+    model_name: "LGTM"
   peft_config:
     r: 8
     lora_alpha: 16
@@ -67,7 +67,7 @@ training:
   warmup_epochs: 2
   epochs: 10
   clip_grad: 2
-  output_path: "./finetuned_models/audio_caption/"
+  output_path: "./finetuned_models/audio_caption_LGTM/"
   eval: True
   validate: False
   use_retrieval: False
