@@ -30,6 +30,10 @@ class CLAP2LLAMA(nn.Module):
         self.decoder.resize_token_embeddings(len(self.tokenizer))
         self.decoder.config.pad_token_id = self.tokenizer.pad_token_id
         self.tokenizer.padding_side = "right"
+        self.tokenizer.model_max_length = 256
+        #if self.tokenizer.pad_token is None:
+        #    self.tokenizer.pad_token = self.tokenizer.eos_token
+        #    self.decoder.config.pad_token_id = self.decoder.config.eos_token_id
         self.decoder_config = self.decoder.config
         
         stop_token_ids = [torch.LongTensor([29871]).to("cuda")]
@@ -258,7 +262,12 @@ class CLAP2LLAMA(nn.Module):
             outputs = self.decoder.generate(
                 inputs_embeds=input_embeds,
                 attention_mask=shifted_attn_mask,
-                generation_config=self.generation_config,
+                num_beams=2,
+                min_length=0,
+                max_length=256,
+                top_p=0.9,
+                repetition_penalty=1.1,
+                #generation_config=self.generation_config,
                 #stopping_criteria=self.stopping_criteria
             )
             print(outputs)
