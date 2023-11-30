@@ -12,7 +12,6 @@ from models.audio_encoder import CLAPAudioTower, CLAPEncoderConfig, HTSATAudioTo
 from models.flamingo_pytorch import PerceiverResampler
 from models.Qformer import *
 from models.LGTM import *
-from transformers import StoppingCriteria, StoppingCriteriaList
 
 
 class CLAP2LLAMA(nn.Module):
@@ -36,22 +35,6 @@ class CLAP2LLAMA(nn.Module):
         #    self.decoder.config.pad_token_id = self.decoder.config.eos_token_id
         self.decoder_config = self.decoder.config
         
-        stop_token_ids = [torch.LongTensor([29871]).to("cuda")]
-
-        # define custom stopping criteria object
-        class StopOnTokens(StoppingCriteria):
-            def __init__(self, stop_token_ids):
-                super(StopOnTokens, self).__init__()
-                self.stop_token_ids = stop_token_ids
-
-            def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-                for stop_ids in self.stop_token_ids:
-                    if torch.eq(input_ids[0][-len(stop_ids):], stop_ids).all():
-                        return True
-                return False
-        self.stopping_criteria = StoppingCriteriaList([StopOnTokens(stop_token_ids)])
-
-
         if self.config.align.model_name == "MLP":
             modules = [
                 nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size),
@@ -268,7 +251,6 @@ class CLAP2LLAMA(nn.Module):
                 top_p=0.9,
                 repetition_penalty=1.1,
                 #generation_config=self.generation_config,
-                #stopping_criteria=self.stopping_criteria
             )
             captions = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
         return captions
