@@ -200,7 +200,7 @@ class CLAP2LLAMA(nn.Module):
         output = self.decoder(inputs_embeds=input_embeds, labels=shifted_input_ids, attention_mask=shifted_attn_mask)
         return output
 
-    def forward(self, audio, caption, retr_audios=[], retr_captions=[]):
+    def forward(self, audio, caption, retr_audios=None retr_captions=None
         encoder_caption = caption
         if retr_captions:
             encoder_caption = [' '.join(caption) for caption in zip(*retr_captions)] # B,K to B
@@ -239,11 +239,11 @@ class CLAP2LLAMA(nn.Module):
         if not self.freeze_lm and 'finetuned' in checkpoint_path:
             self.decoder = PeftModel.from_pretrained(self.decoder.base_model, checkpoint_path)  # suppose don't use get_peft_model
 
-    def generate_caption(self, audio, caption=None, retr_audios=[], retr_captions=[], prompt=None):
+    def generate_caption(self, audio, caption=None, retr_audios=None, retr_captions=None, prompt=None):
         r"""Generate audio captions for each audio recording in a batch"""
         with torch.no_grad():
-            if retr_captions:  # Suppose we only test alignment
-                caption = retr_captions[0]  # Currently suppose only top-1 used, since encoder length is also important
+            if retr_captions:
+                encoder_caption = [' '.join(caption) for caption in zip(*retr_captions)] # B,K to B
             input_embeds, loss = self.forward_encoder(audio, caption) # Only for LGTM, dict type will be better...
             batch_size, seq_length, _ = input_embeds.shape
             shifted_attn_mask = input_embeds.new_zeros((batch_size, seq_length)).long()
