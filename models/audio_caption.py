@@ -183,7 +183,7 @@ class CLAP2LLAMA(nn.Module):
         output = self.decoder(inputs_embeds=input_embeds, labels=shifted_input_ids, attention_mask=shifted_attn_mask)
         return output
 
-    def forward(self, audio, caption, retr_audios=None retr_captions=None
+    def forward(self, audio, caption, retr_audios=None, retr_captions=None):
         encoder_caption = caption
         if retr_captions:
             encoder_caption = [' '.join(caption) for caption in zip(*retr_captions)] # B,K to B
@@ -225,9 +225,10 @@ class CLAP2LLAMA(nn.Module):
     def generate_caption(self, audio, caption=None, retr_audios=None, retr_captions=None, prompt=None):
         r"""Generate audio captions for each audio recording in a batch"""
         with torch.no_grad():
+            encoder_caption = caption
             if retr_captions:
                 encoder_caption = [' '.join(caption) for caption in zip(*retr_captions)] # B,K to B
-            input_embeds, loss = self.forward_encoder(audio, caption) # Only for LGTM, dict type will be better...
+            input_embeds, loss = self.forward_encoder(audio, encoder_caption) # Only for LGTM, dict type will be better...
             batch_size, seq_length, _ = input_embeds.shape
             shifted_attn_mask = input_embeds.new_zeros((batch_size, seq_length)).long()
             shifted_attn_mask[:, :] = 1
