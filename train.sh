@@ -12,8 +12,14 @@ else
     NUM_GPUS=$(echo $CUDA_VISIBLE_DEVICES | awk -F, '{print NF}')
 fi
 
+# Check if there is only 1 GPU in CUDA_VISIBLE_DEVICES
+if [ "$NUM_GPUS" -eq 1 ]; then
+    MULTI_GPU=""
+else
+    MULTI_GPU="--multi_gpu"
+fi
 
-accelerate launch --num_processes $NUM_GPUS --num_machines $NUM_HOSTS --multi_gpu --mixed_precision bf16 --machine_rank 0 --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT train.py --config configs/train.yaml
+accelerate launch --num_processes $NUM_GPUS --num_machines $NUM_HOSTS $MULTI_GPU --mixed_precision bf16 --machine_rank 0 --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT train.py --config configs/train.yaml
 
 # For Multi-node
 #SSH='ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no $hostn'

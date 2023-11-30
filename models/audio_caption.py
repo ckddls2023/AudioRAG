@@ -57,7 +57,7 @@ class CLAP2LLAMA(nn.Module):
                 nn.Linear(self.encoder_config.hidden_size, self.decoder_config.hidden_size),
                 nn.GELU(),
                 nn.Linear(self.decoder_config.hidden_size, self.decoder_config.hidden_size),
-                nn.LayerNorm(self.decoder_config.hidden_size)
+                #nn.LayerNorm(self.decoder_config.hidden_size)
             ]
             self.enc_to_dec_proj = nn.Sequential(*modules)
             self.forward_align = self.forward_mlp
@@ -130,11 +130,11 @@ class CLAP2LLAMA(nn.Module):
             self.decoder.print_trainable_parameters()
 
 
-    def forward_mlp(self, x, text=None):
+    def forward_mlp(self, x, caption=None):
         outputs = self.enc_to_dec_proj(x)
         return outputs, None
 
-    def forward_qformer(self, outputs, text=None):
+    def forward_qformer(self, outputs, caption=None):
         B, S = outputs.size()[:2]
         position_ids = torch.arange(S, dtype=torch.long, device=outputs.device)
         position_ids = position_ids.unsqueeze(0).expand(B, -1)
@@ -151,15 +151,15 @@ class CLAP2LLAMA(nn.Module):
         outputs = self.decoder_proj(audio_query_output.last_hidden_state)
         return outputs, None
 
-    def forward_lgtm(self, outputs, text):
-        audio_query_output, loss = self.enc_to_dec_proj(outputs, text)
+    def forward_lgtm(self, outputs, caption):
+        audio_query_output, loss = self.enc_to_dec_proj(outputs, caption)
         outputs = self.decoder_proj(audio_query_output.last_hidden_state)
         return outputs, loss
 
-    def forward_encoder(self, audios, text=None):
+    def forward_encoder(self, audios, caption=None):
         outputs = self.encoder(audios).last_hidden_state
         #outputs = outputs / outputs.norm(2, -1).unsqueeze(-1)  # Normalize embedding
-        outputs, loss = self.forward_align(outputs, text) # loss is None for MLP, Perceiver, Q-former
+        outputs, loss = self.forward_align(outputs, caption) # loss is None for MLP, Perceiver, Q-former
         return outputs, loss
 
     def get_decoder_embeddings(self):
@@ -179,19 +179,19 @@ class CLAP2LLAMA(nn.Module):
         shifted_attn_mask[:, :prefix_length] = 1
         return shifted_input_ids, shifted_attn_mask
 
-    def prepare_text_input(self, text, device):
-        tokenized_text = self.tokenizer(text, padding='longest', truncation=True, return_tensors="pt")
+    def prepare_text_input(self, caption, device):
+        tokenized_text = self.tokenizer(caption, padding='longest', truncation=True, return_tensors="pt")
         input_ids = tokenized_text["input_ids"].to(device)
         attn_mask = tokenized_text["attention_mask"].to(device)
         return input_ids, attn_mask
 
-    def forward_decoder(self, audio_embed, text, retr_audio_embeds=None, retr_texts=None):
-        input_ids, attn_mask = self.prepare_text_input(text, audio_embed.device)
+    def forward_decoder(self, audio_embed, caption, retr_audio_embeds=None, retr_captions=None):
+        input_ids, attn_mask = self.prepare_text_input(caption, audio_embed.device)
         input_embeds = torch.cat((audio_embed, self.get_decoder_embeddings()(input_ids)), dim=1)
         shifted_input_ids, shifted_attn_mask = self.shift_and_pad_input(input_ids, attn_mask, audio_embed.shape[1])
         if retr_audio_embeds:
-            for retr_audio_embed, retr_text in zip(retr_audio_embeds, retr_texts):
-                retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_text, audio_embed.device)
+            for retr_audio_embed, retr_caption in zip(retr_audio_embeds, retr_captions):
+                retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_caption, audio_embed.device)
                 retr_input_embeds = torch.cat((retr_audio_embed, self.get_decoder_embeddings()(retr_input_ids)), dim=1)
                 shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(retr_input_ids, retr_attn_mask, retr_audio_embed.shape[1])
                 input_embeds = torch.cat((retr_input_embeds, input_embeds), dim=1)
@@ -200,16 +200,17 @@ class CLAP2LLAMA(nn.Module):
         output = self.decoder(inputs_embeds=input_embeds, labels=shifted_input_ids, attention_mask=shifted_attn_mask)
         return output
 
-    def forward(self, audio, text, retr_audios=None, retr_texts=None):
-        if text is None:
-            text = [' '.join(texts) for texts in zip(*retr_texts)] # B,K to B
-        audio_embed, loss = self.forward_encoder(audio, text)  # Only for LGTM
+    def forward(self, audio, caption, retr_audios=[], retr_captions=[]):
+        encoder_caption = caption
+        if retr_captions:
+            encoder_caption = [' '.join(caption) for caption in zip(*retr_captions)] # B,K to B
+        audio_embed, loss = self.forward_encoder(audio, encoder_caption)  # Only for LGTM
         retr_audio_embeds = []
-        if retr_audios is not None:
-            for retr_audio, retr_text in zip(retr_audios, retr_texts):
-                retr_embed, _ = self.forward_encoder(retr_audio, retr_text)
+        if retr_audios:
+            for retr_audio, retr_caption in zip(retr_audios, retr_captions):
+                retr_embed, _ = self.forward_encoder(retr_audio, retr_caption)
                 retr_audio_embeds.append(retr_embed)
-        output = self.forward_decoder(audio_embed, text, retr_audio_embeds, retr_texts)
+        output = self.forward_decoder(audio_embed, caption, retr_audio_embeds, retr_captions)
         if loss is not None:
             output["loss"] += output["loss"] + 0.1 * loss
         return output
@@ -238,23 +239,22 @@ class CLAP2LLAMA(nn.Module):
         if not self.freeze_lm and 'finetuned' in checkpoint_path:
             self.decoder = PeftModel.from_pretrained(self.decoder.base_model, checkpoint_path)  # suppose don't use get_peft_model
 
-    def generate_caption(self, audio, text=None, retr_audios=None, retr_texts=None, prompt=None):
+    def generate_caption(self, audio, caption=None, retr_audios=[], retr_captions=[], prompt=None):
         r"""Generate audio captions for each audio recording in a batch"""
         with torch.no_grad():
-            if retr_texts is not None:  # Suppose we only test alignment
-                text = retr_texts[0]  # Currently suppose only top-1 used, since encoder length is also important
-            input_embeds, loss = self.forward_encoder(audio, text) # Only for LGTM, dict type will be better...
-            # input_embeds = self.forward_encoder(audio, text)
+            if retr_captions:  # Suppose we only test alignment
+                caption = retr_captions[0]  # Currently suppose only top-1 used, since encoder length is also important
+            input_embeds, loss = self.forward_encoder(audio, caption) # Only for LGTM, dict type will be better...
             batch_size, seq_length, _ = input_embeds.shape
             shifted_attn_mask = input_embeds.new_zeros((batch_size, seq_length)).long()
             shifted_attn_mask[:, :] = 1
             if retr_audios is not None:
                 retr_audio_embeds = []
-                for retr_audio, retr_text in zip(retr_audios, retr_texts):
-                    retr_embed, loss = self.forward_encoder(retr_audio, retr_text)
+                for retr_audio, retr_caption in zip(retr_audios, retr_captions):
+                    retr_embed, loss = self.forward_encoder(retr_audio, retr_caption)
                     retr_audio_embeds.append(retr_embed)
-                for retr_audio_embed, retr_text in zip(retr_audio_embeds, retr_texts):
-                    input_ids, attn_mask = self.prepare_text_input(retr_text, input_embeds.device)
+                for retr_audio_embed, retr_caption in zip(retr_audio_embeds, retr_captions):
+                    input_ids, attn_mask = self.prepare_text_input(retr_caption, input_embeds.device)
                     retr_input_embeds = torch.cat((retr_audio_embed, self.get_decoder_embeddings()(input_ids)), dim=1)
                     shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(input_ids, attn_mask, retr_audio_embed.shape[1])
                     input_embeds = torch.cat((retr_input_embeds, input_embeds), dim=1)
@@ -270,8 +270,8 @@ class CLAP2LLAMA(nn.Module):
                 #generation_config=self.generation_config,
                 #stopping_criteria=self.stopping_criteria
             )
-            print(outputs)
-        return outputs
+            captions = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        return captions
 
 
 if __name__ == "__main__":

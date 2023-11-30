@@ -38,13 +38,13 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0):
     retr_texts = None
     retr_audios = None
     start_time = time.time()
-    for batch_id, (audio, text, _, retr_audios, retr_texts) in enumerate(pbar := tqdm(dataloader, total=len(dataloader))):
+    for batch_id, (audio, caption, _, retr_audios, retr_captions) in enumerate(pbar := tqdm(dataloader, total=len(dataloader))):
         iter_time = time.time() - start_time
         with accelerator.accumulate(model):
             optimizer.zero_grad()
             step = len(dataloader) * (epoch - 1) + batch_id
             with accelerator.autocast():
-                output = model(audio, text, retr_audios=retr_audios, retr_texts=retr_texts)
+                output = model(audio, caption, retr_audios=retr_audios, retr_captions=retr_captions)
             accelerator.backward(output["loss"])
             if accelerator.sync_gradients:
                 accelerator.clip_grad_norm_(model.parameters(), max_grad) # 1.0
@@ -70,22 +70,14 @@ def validate(data_loader, model, epoch):
     cider = CiderMetric()
     unwrapped_model = accelerator.unwrap_model(model)
     gen_captions = []
-    retr_texts = None
-    retr_audios = None
-    ref_captions = [captions for (_, captions, _) in data_loader]
+    ref_captions = []
     for i, batch_data in tqdm(enumerate(data_loader), total=len(data_loader)):
-        audio, caption_dict, audio_names, retr_audios, retr_texts = batch_data
+        audio, caption, audio_names, retr_audios, retr_captions = batch_data
         with accelerator.autocast():
-            if not retr_texts: 
-                retr_texts = [[caption[0] for caption in caption_dict]]
-            output = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_texts=retr_texts)
-            gathered_output = accelerator.gather_for_metrics((output))
-            gen_caption = unwrapped_model.tokenizer.batch_decode(gathered_output, skip_special_tokens=True)
+            gen_caption = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_captions=retr_captions)
             print(gen_caption)
             gen_captions.extend(gen_caption)
-    min_length = min(len(gen_captions),len(ref_captions))
-    gen_captions = gen_captions[:min_length] # Due to drop_last wrong behavior, length is different
-    ref_captions = ref_captions[:min_length] # Due to drop_last wrong behavior, length is different
+            ref_captions.extend(caption)
     if accelerator.is_main_process:
         sacrebleu_score = sacrebleu.compute(predictions=gen_captions, references=ref_captions)
         meteor_score = meteor.compute(predictions=gen_captions, references=ref_captions)
@@ -119,6 +111,8 @@ def main():
     )
     model = CLAP2LLAMA(config.model_args)
     accelerator.gradient_accumulation_steps = config.data_args.global_batch_size // (config.data_args.batch_size*accelerator.state.num_processes)
+    if config.training.eval: # Load checkpoint & Eval only,
+        config.index_args.index_path = ""
     if config.model_args.checkpoint_path:
         model.load_ckpt(config.model_args.checkpoint_path)
     train_dataloader = pretrain_dataloader(config, subset="train_jsons", bucket=False, is_distributed=False,num_tasks=1,global_rank=0,shuffle=True,retrieve_map=config.index_args.index_path,top_k=config.index_args.top_k)
@@ -127,7 +121,7 @@ def main():
     warmup_steps = int(len(train_dataloader)*config.training.warmup_epochs/accelerator.gradient_accumulation_steps)
     train_steps = int(len(train_dataloader)*config.training.epochs/accelerator.gradient_accumulation_steps)
     scheduler = transformers.get_cosine_schedule_with_warmup(optimizer, warmup_steps, train_steps)
-    train_dataloader, val_dataloader, model, optimizer, scheduler = accelerator.prepare(train_dataloader, val_dataloader, model, optimizer, scheduler)
+    train_dataloader, model, optimizer, scheduler = accelerator.prepare(train_dataloader, model, optimizer, scheduler)
     spiders = []
     save_ckpt = accelerator.is_main_process
     if accelerator.state.mixed_precision == "no": # Ampere, Hopper
