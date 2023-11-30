@@ -192,8 +192,8 @@ class CLAP2LLAMA(nn.Module):
         if retr_audio_embeds:
             for retr_audio_embed, retr_caption in zip(retr_audio_embeds, retr_captions):
                 retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_caption, audio_embed.device)
-                retr_input_embeds = torch.cat((retr_audio_embed, self.get_decoder_embeddings()(retr_input_ids)), dim=1)
-                shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(retr_input_ids, retr_attn_mask, retr_audio_embed.shape[1])
+                retr_input_embeds = torch.cat((retr_audio_embed, self.get_decoder_embeddings()(retr_input_ids[:,:-1])), dim=1) # Remove EOS token
+                shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(retr_input_ids[:,:-1], retr_attn_mask[:,:-1], retr_audio_embed.shape[1]) 
                 input_embeds = torch.cat((retr_input_embeds, input_embeds), dim=1)
                 shifted_input_ids = torch.cat((shifted_retr_ids, shifted_input_ids), dim=1)
                 shifted_attn_mask = torch.cat((shifted_retr_mask, shifted_attn_mask), dim=1)
@@ -254,9 +254,9 @@ class CLAP2LLAMA(nn.Module):
                     retr_embed, loss = self.forward_encoder(retr_audio, retr_caption)
                     retr_audio_embeds.append(retr_embed)
                 for retr_audio_embed, retr_caption in zip(retr_audio_embeds, retr_captions):
-                    input_ids, attn_mask = self.prepare_text_input(retr_caption, input_embeds.device)
-                    retr_input_embeds = torch.cat((retr_audio_embed, self.get_decoder_embeddings()(input_ids)), dim=1)
-                    shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(input_ids, attn_mask, retr_audio_embed.shape[1])
+                    retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_caption, input_embeds.device)
+                    retr_input_embeds = torch.cat((retr_audio_embed, self.get_decoder_embeddings()(retr_input_ids)[:,:-1]), dim=1) # remove EOS token
+                    shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(retr_input_ids[:,:-1], retr_attn_mask[:,:-1], retr_audio_embed.shape[1])
                     input_embeds = torch.cat((retr_input_embeds, input_embeds), dim=1)
                     shifted_attn_mask = torch.cat((shifted_retr_mask, shifted_attn_mask), dim=1)
             outputs = self.decoder.generate(
