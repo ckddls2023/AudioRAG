@@ -13,11 +13,7 @@ from utils import get_ss_model
 from pipeline import inference
 
 
-# Get the total memory of the system
-total_memory = psutil.virtual_memory().total
-reserved_memory = total_memory * 0.1
-ray_memory = total_memory - reserved_memory
-ray.init(object_store_memory=ray_memory, _memory=ray_memory)
+ray.init()
 
 json_files = [
   '../data/json_files/AudioSet/val.json',
