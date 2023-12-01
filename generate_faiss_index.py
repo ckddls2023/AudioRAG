@@ -21,10 +21,10 @@ from laion_clap.training.data import get_audio_features, int16_to_float32, float
 
 # Get the total memory of the system
 num_gpus = torch.cuda.device_count()
-num_cpus = 4*num_gpus
+num_cpus = 8*num_gpus
 total_memory = psutil.virtual_memory().total
 ray_memory = total_memory*0.4
-ray.init(num_cpus=num_cpus, object_store_memory=ray_memory, _memory=ray_memory)
+ray.init(num_cpus=num_cpus, num_gpus=num_gpus, object_store_memory=ray_memory, _memory=ray_memory)
 
 retrieve_json_files = [
   './data/json_files/BBC_Sound_Effects/bbc_final.json',
@@ -90,8 +90,9 @@ for json_file in retrieve_json_files:
     with open(json_file, 'r') as file:
         data = json.load(file)
     
-    audio_captions = audio_captions + [entry["caption"] for entry in data["data"]]
-    audio_filenames = audio_filenames + [entry["audio"] for entry in data["data"]]
+    data_filtered = [entry for entry in data["data"] if entry["duration"] <= 40] # Only under 40s
+    audio_captions = audio_captions + [entry["caption"] for entry in data_filtered]
+    audio_filenames = audio_filenames + [entry["audio"] for entry in data_filtered]
     
 def collate_fn(batch):
     keys = batch.keys()
@@ -110,9 +111,26 @@ if not index_exists:
     for json_file in retrieve_json_files:
         with open(json_file, 'r') as file:
             data = json.load(file)
+        for entry in data["data"]:
+            if 'author' in entry:
+                del entry["author"]
+            if 'description' in entry:
+                del entry["description"]
+            if 'download_link' in entry:
+                del entry["download_link"]
+            if 'file_name' in entry:
+                del entry["file_name"]
+            if 'tags' in entry:
+                del entry["tags"]
+            if 'href' in entry:
+                del entry["href"]
+            if 'category' in entry:
+                del entry["category"]
+            if 'title' in entry:
+                del entry["title"]
         data_filtered = [entry for entry in data["data"] if entry["duration"] <= 40] # Only under 40s
         filtered_data.extend(data_filtered)
-    dataset = from_items(data_filtered)
+    dataset = from_items(filtered_data)
     transformed_dataset = dataset.map(preprocess_waveform)
     result_refs = []
     for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=16, _collate_fn=collate_fn)):
@@ -165,6 +183,24 @@ query_data = []
 for json_file in query_json_files:
     with open(json_file, 'r') as file:
         data = json.load(file)
+    for entry in data["data"]:
+        if 'author' in entry:
+            del entry["author"]
+        if 'description' in entry:
+            del entry["description"]
+        if 'download_link' in entry:
+            del entry["download_link"]
+        if 'file_name' in entry:
+            del entry["file_name"]
+        if 'tags' in entry:
+            del entry["tags"]
+        if 'href' in entry:
+            del entry["href"]
+        if 'category' in entry:
+            del entry["category"]
+        if 'title' in entry:
+            del entry["title"]
+        del entry["caption"]
     query_data.extend(data["data"])
     
 dataset = from_items(query_data)
