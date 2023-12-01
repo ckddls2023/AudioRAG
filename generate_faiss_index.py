@@ -12,13 +12,18 @@ import time
 import os
 import librosa
 import json
+import psutil
 import numpy as np
 import ray
 from ray.data import from_items
 from laion_clap import CLAP_Module
 from laion_clap.training.data import get_audio_features, int16_to_float32, float32_to_int16
 
-ray.init()  # Initialize Ray
+# Get the total memory of the system
+total_memory = psutil.virtual_memory().total
+reserved_memory = total_memory * 0.1
+ray_memory = total_memory - reserved_memory
+ray.init(object_store_memory=ray_memory, _memory=ray_memory)
 
 retrieve_json_files = [
   './data/json_files/BBC_Sound_Effects/bbc_final.json',
@@ -99,28 +104,25 @@ def collate_fn(batch):
         transposed_batch.append(data_point)
     return transposed_batch
         
+total_data_entries = 0
 if not index_exists:
     num_gpus = get_gpu_count()
     embed_encoder_actors = [AudioEmbeddingEncoder.remote() for _ in range(num_gpus)]
-    audio_embeds = []
-
+    filtered_data = []
     for json_file in retrieve_json_files:
-        
         with open(json_file, 'r') as file:
             data = json.load(file)
-            
-        dataset = from_items(data["data"])
-        transformed_dataset = dataset.map(preprocess_waveform)
-        result_refs = []
-        for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=32, _collate_fn=collate_fn)):
-            actor = embed_encoder_actors[i % num_gpus]
-            result_refs.append(actor.encode.remote(batch))
-        result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
-        audio_embeds = audio_embeds + [torch.cat(result_list, dim=0)] # [(B,512), (B,512)...] -> (total_samples, 512)
-    
-    audio_embeds = torch.cat(audio_embeds, dim=0)
+        data_filtered = [entry for entry in data["data"] if entry["duration"] <= 40] # Only under 40s
+        filtered_data.extend(data_filtered)
+    dataset = from_items(data_filtered)
+    transformed_dataset = dataset.map(preprocess_waveform)
+    result_refs = []
+    for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=16, _collate_fn=collate_fn)):
+        actor = embed_encoder_actors[i % num_gpus]
+        result_refs.append(actor.encode.remote(batch))
+    result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
+    audio_embeds = torch.cat(result_list, dim=0)
     audio_embeds = audio_embeds.cpu().numpy()
-
     dim = audio_embeds.shape[1] # B, H
     nlist = 512 # 32~512, trade-off between search time, nprobe=32~128
     quantizer = faiss.IndexFlatL2(dim)
@@ -133,12 +135,12 @@ else:
     index_cpu = faiss.read_index(index_file_path)
 
 # Sanity check
-total_data_entries = 0
 for json_file in retrieve_json_files:
     if os.path.exists(json_file):
         with open(json_file, 'r') as file:
             data = json.load(file)
-            total_data_entries += len(data["data"])
+            data_filtered = [entry for entry in data["data"] if entry["duration"] <= 40] # Only under 40s
+            total_data_entries += len(data_filtered)
 print(f"length of data samples {total_data_entries} and faiss index embedding {index_cpu.ntotal}")
     
 

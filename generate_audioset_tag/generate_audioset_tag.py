@@ -3,6 +3,7 @@ import torch
 import librosa
 import random
 import numpy as np
+import psutil
 import ray
 from ray.data import from_items
 import torch.nn.functional as F
@@ -11,7 +12,12 @@ from models.audiosep import AudioSep
 from utils import get_ss_model
 from pipeline import inference
 
-ray.init()  # Initialize Ray
+
+# Get the total memory of the system
+total_memory = psutil.virtual_memory().total
+reserved_memory = total_memory * 0.1
+ray_memory = total_memory - reserved_memory
+ray.init(object_store_memory=ray_memory, _memory=ray_memory)
 
 json_files = [
   '../data/json_files/AudioSet/val.json',
