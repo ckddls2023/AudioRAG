@@ -35,8 +35,6 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0):
     model.train()
     epoch_loss = AverageMeter()
     start_time = time.time()
-    retr_texts = None
-    retr_audios = None
     start_time = time.time()
     for batch_id, (audio, caption, _, retr_audios, retr_captions) in enumerate(pbar := tqdm(dataloader, total=len(dataloader))):
         iter_time = time.time() - start_time
@@ -73,6 +71,8 @@ def validate(data_loader, model, epoch):
     ref_captions = []
     for i, batch_data in tqdm(enumerate(data_loader), total=len(data_loader)):
         audio, caption, audio_names, retr_audios, retr_captions = batch_data
+        if not retr_captions: # If retrieved results is missing, num_captions = 5, choose 1
+            retr_captions = [[texts[0] for texts in caption]]
         with accelerator.autocast():
             gen_caption = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_captions=retr_captions)
             print(gen_caption)
@@ -111,7 +111,7 @@ def main():
     )
     model = CLAP2LLAMA(config.model_args)
     accelerator.gradient_accumulation_steps = config.data_args.global_batch_size // (config.data_args.batch_size*accelerator.state.num_processes)
-    if config.training.eval: # Load checkpoint & Eval only,
+    if config.training.eval and not "LGTM" in config.model_args.align.model_name: # Load checkpoint & Eval only,
         config.index_args.index_path = ""
     if config.model_args.checkpoint_path:
         model.load_ckpt(config.model_args.checkpoint_path)

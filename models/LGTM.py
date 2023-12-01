@@ -43,10 +43,10 @@ class LGTM(nn.Module):
         self.temperature = 0.2
         # self.projection_head = nn.Linear(hidden_size, hidden_size, bias=False)
 
-    def forward(self, audio_embeds, text):
+    def forward(self, audio_embeds, caption):
         # Embed text using T5 encoder
         B, S = audio_embeds.size()[:2]
-        text = self.tokenizer(text, padding='longest', truncation=True, return_tensors="pt")
+        text = self.tokenizer(caption, padding='longest', truncation=True, return_tensors="pt")
         input_ids = text["input_ids"].to(audio_embeds.device)
         attention_mask = text["attention_mask"].to(audio_embeds.device)  # [B, 768], fine-grained [B,32,768]
         text_encoder_output = self.text_encoder(
