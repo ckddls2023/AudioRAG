@@ -90,6 +90,15 @@ for json_file in retrieve_json_files:
     audio_captions = audio_captions + [entry["caption"] for entry in data["data"]]
     audio_filenames = audio_filenames + [entry["audio"] for entry in data["data"]]
     
+def collate_fn(batch):
+    keys = batch.keys()
+    batch_length = len(batch["longer"])
+    transposed_batch = []
+    for i in range(batch_length):
+        data_point = {key: torch.tensor(batch[key][i]) for key in keys}
+        transposed_batch.append(data_point)
+    return transposed_batch
+        
 if not index_exists:
     num_gpus = get_gpu_count()
     embed_encoder_actors = [AudioEmbeddingEncoder.remote() for _ in range(num_gpus)]
@@ -99,11 +108,11 @@ if not index_exists:
         
         with open(json_file, 'r') as file:
             data = json.load(file)
-        
+            
         dataset = from_items(data["data"])
         transformed_dataset = dataset.map(preprocess_waveform)
         result_refs = []
-        for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=16)):
+        for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=32, _collate_fn=collate_fn)):
             actor = embed_encoder_actors[i % num_gpus]
             result_refs.append(actor.encode.remote(batch))
         result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
@@ -160,7 +169,7 @@ for json_file in query_json_files:
     dataset = from_items(data["data"])
     transformed_dataset = dataset.map(preprocess_waveform)
     result_refs = []
-    for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=16)):
+    for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=32, _collate_fn=collate_fn)):
         actor = embed_encoder_actors[i % num_gpus]
         result_refs.append(actor.encode.remote(batch))
     result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
