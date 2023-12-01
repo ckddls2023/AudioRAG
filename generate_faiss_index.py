@@ -12,7 +12,6 @@ import time
 import os
 import librosa
 import json
-from generate_audioset_tag.models.CLAP.training.data import preprocess
 import numpy as np
 import ray
 from ray.data import from_items
@@ -35,8 +34,24 @@ query_json_files = [
   './data/json_files/Clotho/val.json',
 ]
 
-def preprocess_waveform(self, wav_path, duration):
-    waveform, sr = librosa.load(wav_path, sr=self.sr, duration=duration)
+index_file_path = "./index_final.faiss"
+index_exists = os.path.exists(index_file_path)
+
+def preprocess_waveform(record):
+    audio_cfg = {
+        "audio_length": 1024,
+        "clip_samples": 480000,
+        "mel_bins": 64,
+        "sample_rate": 48000,
+        "window_size": 1024,
+        "hop_size": 480,
+        "fmin": 50,
+        "fmax": 14000,
+        "class_num": 527,
+        "model_type": "HTSAT",
+        "model_name": "base"
+    }
+    waveform, sr = librosa.load(record["audio"], sr=48000, duration=record["duration"])
     audio_waveform = int16_to_float32(float32_to_int16(waveform))
     audio_waveform = torch.from_numpy(audio_waveform).float()
     temp_dict = {}
@@ -44,7 +59,7 @@ def preprocess_waveform(self, wav_path, duration):
         temp_dict, audio_waveform, 480000,
         data_truncating='fusion',
         data_filling='repeatpad',
-        audio_cfg=self.audio_cfg,
+        audio_cfg=audio_cfg,
         require_grad=False,
     )
     return temp_dict
@@ -65,35 +80,59 @@ class AudioEmbeddingEncoder:
         outputs = self.clap.model.get_audio_embedding(batch)
         return outputs
     
-num_gpus = get_gpu_count()
-embed_encoder_actors = [AudioEmbeddingEncoder.remote() for _ in range(num_gpus)]
-
-audio_embeds = []
 audio_filenames = []
 audio_captions = []
-
 for json_file in retrieve_json_files:
     
     with open(json_file, 'r') as file:
         data = json.load(file)
     
-    dataset = from_items(data["data"])
-    audio_captions = audio_captions + [entry["caption"] for entry in dataset]
-    audio_filenames = audio_filenames + [entry["audio"] for entry in dataset]
-    transformed_dataset = dataset.map(preprocess_waveform)
-    result_refs = []
-    for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=16)):
-        actor = embed_encoder_actors[i % num_gpus]
-        result_refs.append(actor.encode.remote(batch))
-    result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
-    audio_embeds = audio_embeds + [torch.cat(result_list, dim=0)] # [(B,512), (B,512)...] -> (total_samples, 512)
-  
-audio_embeds = torch.cat(audio_embeds, dim=0)
-audio_embeds = audio_embeds.cpu().numpy()
+    audio_captions = audio_captions + [entry["caption"] for entry in data["data"]]
+    audio_filenames = audio_filenames + [entry["audio"] for entry in data["data"]]
+    
+if not index_exists:
+    num_gpus = get_gpu_count()
+    embed_encoder_actors = [AudioEmbeddingEncoder.remote() for _ in range(num_gpus)]
+    audio_embeds = []
 
-dim = audio_embeds.shape[1] # B, H
-index = faiss.IndexFlatL2(dim)  # Use IndexFlatIP for inner-product
-index.add(audio_embeds)
+    for json_file in retrieve_json_files:
+        
+        with open(json_file, 'r') as file:
+            data = json.load(file)
+        
+        dataset = from_items(data["data"])
+        transformed_dataset = dataset.map(preprocess_waveform)
+        result_refs = []
+        for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=16)):
+            actor = embed_encoder_actors[i % num_gpus]
+            result_refs.append(actor.encode.remote(batch))
+        result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
+        audio_embeds = audio_embeds + [torch.cat(result_list, dim=0)] # [(B,512), (B,512)...] -> (total_samples, 512)
+    
+    audio_embeds = torch.cat(audio_embeds, dim=0)
+    audio_embeds = audio_embeds.cpu().numpy()
+
+    dim = audio_embeds.shape[1] # B, H
+    nlist = 512 # 32~512, trade-off between search time, nprobe=32~128
+    quantizer = faiss.IndexFlatL2(dim)
+    index_cpu = faiss.IndexIVFFlat(quantizer, dim, nlist)
+    training_samples = np.random.permutation(audio_embeds)[:29000] # Determine the number of training samples, typically ~10% of your dataset, 290k->29k
+    index_cpu.train(training_samples)
+    index_cpu.add(audio_embeds)
+    faiss.write_index(index_cpu, index_file_path)
+else:
+    index_cpu = faiss.read_index(index_file_path)
+
+# Sanity check
+total_data_entries = 0
+for json_file in retrieve_json_files:
+    if os.path.exists(json_file):
+        with open(json_file, 'r') as file:
+            data = json.load(file)
+            total_data_entries += len(data["data"])
+print(f"length of data samples {total_data_entries} and faiss index embedding {index_cpu.ntotal}")
+    
+
 @ray.remote
 class FaissSearcher:
     def __init__(self, index, nprobe, top_k):
@@ -106,7 +145,7 @@ class FaissSearcher:
         return distances, indices
 
 num_cpus = ray.available_resources()["CPU"]
-search_actors = [FaissSearcher.remote(index, nprobe=16, top_k=5) for _ in range(int(num_cpus))]
+search_actors = [FaissSearcher.remote(index_cpu, nprobe=16, top_k=5) for _ in range(int(num_cpus))]
 
 # Define a function to split query embeddings into batches
 def split_into_batches(embeddings, batch_size):

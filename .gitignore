@@ -436,6 +436,7 @@ __MACOSX/
 *.pth
 *.pt
 *.bin
+*.faiss
 wandb/
 tmp/
 pretrained_models/
