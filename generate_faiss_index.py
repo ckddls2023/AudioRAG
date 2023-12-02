@@ -104,9 +104,9 @@ def collate_fn(batch):
     return transposed_batch
         
 total_data_entries = 0
+embed_encoder_actors = [AudioEmbeddingEncoder.remote() for _ in range(num_gpus)]
 print(f"Available resources : {num_cpus = } {num_gpus =}")
 if not index_exists:
-    embed_encoder_actors = [AudioEmbeddingEncoder.remote() for _ in range(num_gpus)]
     filtered_data = []
     for json_file in retrieve_json_files:
         with open(json_file, 'r') as file:
@@ -148,6 +148,7 @@ if not index_exists:
     index_cpu.add(audio_embeds)
     faiss.write_index(index_cpu, index_file_path)
 else:
+    print("reaload faiss index from disk")
     index_cpu = faiss.read_index(index_file_path)
 
 # Sanity check
@@ -157,7 +158,7 @@ for json_file in retrieve_json_files:
             data = json.load(file)
             data_filtered = [entry for entry in data["data"] if entry["duration"] <= 40] # Only under 40s
             total_data_entries += len(data_filtered)
-print(f"length of data samples {total_data_entries} and faiss index embedding {index_cpu.ntotal}")
+print(f"length of data samples {total_data_entries} and faiss index embedding {index_cpu.ntotal}, caption {len(audio_captions)}")
     
 
 @ray.remote
@@ -220,12 +221,13 @@ for i, query_batch in enumerate(query_batches):
     actor = search_actors[i % len(search_actors)]
     task = actor.search.remote(query_batch)  # Assuming top_k is defined
     search_tasks.append(task)
-    
-data_batches = split_into_batches(dataset, 64)  # B => N, 64
-for data_batch, task in zip(data_batches, search_tasks):
-    distances, indices = ray.get(task)
-    for entry, indice in zip(data_batch, indices):
-        retrieved_results[entry['audio']] = [(audio_filenames[i],audio_captions[i]) for i in indice]
+search_results = ray.get(search_tasks) # Asynchronous execution, we synchronize after all results 
+total_length = sum(len(indices) for (distances, indices) in search_results)
+print(f"length of total samples {len(query_data)}, length of indices {total_length}")
+
+for i, (distances, indices) in enumerate(search_results):
+    for j, indice in enumerate(indices):
+        retrieved_results[query_data[i*batch_size+j]['audio']] = [(audio_filenames[i],audio_captions[i]) for i in indice]
 
 # Save the results
 with open('retrieved_results.json', 'w') as f:
