@@ -220,7 +220,7 @@ class CLAP2LLAMA(nn.Module):
         if self.config.align.model_name == "LGTM":
             self.enc_to_dec_proj.load_state_dict(torch.load(checkpoint_path+"enc_to_dec_proj.bin"), strict=False)
         if not self.freeze_lm and 'finetuned' in checkpoint_path:
-            self.decoder = PeftModel.from_pretrained(self.decoder.base_model, checkpoint_path)  # suppose don't use get_peft_model
+            self.decoder = PeftModel.from_pretrained(self.decoder.base_model, checkpoint_path, config=self.peft_config)  # suppose don't use get_peft_model
 
     def generate_caption(self, audio, caption=None, retr_audios=None, retr_captions=None, prompt=None):
         r"""Generate audio captions for each audio recording in a batch"""

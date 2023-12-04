@@ -21,7 +21,7 @@ from laion_clap.training.data import get_audio_features, int16_to_float32, float
 
 # Get the total memory of the system
 num_gpus = torch.cuda.device_count()
-num_cpus = 8*num_gpus
+num_cpus = 4*num_gpus
 total_memory = psutil.virtual_memory().total
 ray_memory = total_memory*0.4
 ray.init(num_cpus=num_cpus, num_gpus=num_gpus, object_store_memory=ray_memory, _memory=ray_memory)
@@ -31,6 +31,8 @@ retrieve_json_files = [
   './data/json_files/FreeSound/fsd_final.json',
   './data/json_files/SoundBible/sb_final.json',
   './data/json_files/AudioSet_SL/as_final.json',
+  './data/json_files/AudioSet/train.json',
+  './data/json_files/Clotho/train.json',
 ]
 
 query_json_files = [
@@ -40,7 +42,8 @@ query_json_files = [
   './data/json_files/Clotho/val.json',
 ]
 
-index_file_path = "./index_final.faiss"
+#index_file_path = "./data/index/index_pretrain.faiss"
+index_file_path = "./data/index/index_whole.faiss"
 index_exists = os.path.exists(index_file_path)
 
 def preprocess_waveform(record):
@@ -90,6 +93,10 @@ for json_file in retrieve_json_files:
     with open(json_file, 'r') as file:
         data = json.load(file)
     
+    if data["num_captions_per_audio"] > 1:
+        for entry in data["data"]:
+            entry["caption"] = entry["caption"][0] # Only take first caption as retrieve text
+    
     data_filtered = [entry for entry in data["data"] if entry["duration"] <= 40] # Only under 40s
     audio_captions = audio_captions + [entry["caption"] for entry in data_filtered]
     audio_filenames = audio_filenames + [entry["audio"] for entry in data_filtered]
@@ -128,6 +135,7 @@ if not index_exists:
                 del entry["category"]
             if 'title' in entry:
                 del entry["title"]
+            del entry["caption"]
         data_filtered = [entry for entry in data["data"] if entry["duration"] <= 40] # Only under 40s
         filtered_data.extend(data_filtered)
     dataset = from_items(filtered_data)
@@ -140,9 +148,10 @@ if not index_exists:
     audio_embeds = torch.cat(result_list, dim=0)
     audio_embeds = audio_embeds.detach().cpu().numpy()
     dim = audio_embeds.shape[1] # B, H
-    nlist = 512 # 32~512, trade-off between search time, nprobe=32~128
-    quantizer = faiss.IndexFlatL2(dim)
-    index_cpu = faiss.IndexIVFFlat(quantizer, dim, nlist)
+    #nlist = 512 # 32~512, trade-off between search time, nprobe=32~128
+    #quantizer = faiss.IndexFlatL2(dim)
+    #index_cpu = faiss.IndexIVFFlat(quantizer, dim, nlist) # Introduce very erronoues results
+    index_cpu = faiss.IndexFlatIP(dim)
     training_samples = np.random.permutation(audio_embeds)[:29000] # Determine the number of training samples, typically ~10% of your dataset, 290k->29k
     index_cpu.train(training_samples)
     index_cpu.add(audio_embeds)
@@ -181,28 +190,23 @@ def split_into_batches(embeddings, batch_size):
 retrieved_results = {}
 
 query_data = []
+tags = []
 for json_file in query_json_files:
     with open(json_file, 'r') as file:
         data = json.load(file)
-    for entry in data["data"]:
-        if 'author' in entry:
-            del entry["author"]
-        if 'description' in entry:
-            del entry["description"]
-        if 'download_link' in entry:
-            del entry["download_link"]
-        if 'file_name' in entry:
-            del entry["file_name"]
-        if 'tags' in entry:
-            del entry["tags"]
-        if 'href' in entry:
-            del entry["href"]
-        if 'category' in entry:
-            del entry["category"]
-        if 'title' in entry:
-            del entry["title"]
-        del entry["caption"]
-    query_data.extend(data["data"])
+    for entry in data["data"][:32]:
+        # Remove specified keys
+        keys_to_remove = ['author', 'description', 'download_link', 'file_name', 'href', 'category', 'title', 'caption']
+        for key in keys_to_remove:
+            if key in entry:
+                del entry[key]
+        # To find TAG
+        tags.append((entry['audio'],entry['tag']))
+        for i, tag in enumerate(entry['tag']):
+            new_entry = entry.copy()
+            new_entry["audio"] = entry["audio"].replace('.wav', f"_{i}.wav")
+            query_data.append(new_entry)
+        #query_data.append(entry)
     
 dataset = from_items(query_data)
 transformed_dataset = dataset.map(preprocess_waveform)
@@ -225,10 +229,44 @@ search_results = ray.get(search_tasks) # Asynchronous execution, we synchronize 
 total_length = sum(len(indices) for (distances, indices) in search_results)
 print(f"length of total samples {len(query_data)}, length of indices {total_length}")
 
-for i, (distances, indices) in enumerate(search_results):
-    for j, indice in enumerate(indices):
-        retrieved_results[query_data[i*batch_size+j]['audio']] = [(audio_filenames[i],audio_captions[i]) for i in indice]
+#for i, (distances, indices) in enumerate(search_results):
+#    for j, indice in enumerate(indices):
+#        if query_data[i*batch_size+j]['audio'] == audio_filenames[indice[0]]: # Remove first element which it is itself
+#            retrieved_results[query_data[i*batch_size+j]['audio']] = [(audio_filenames[i],audio_captions[i]) for i in indice[1:]]
+#        else:
+#            retrieved_results[query_data[i*batch_size+j]['audio']] = [(audio_filenames[i],audio_captions[i]) for i in indice]
+
+# To find tags 
+# TODO : Remove it-self
+# TODO : Before retrieve, please verify tag seperated audio first
+distances = [elem[0] for elem in search_results]
+indices = [elem[1] for elem in search_results]
+distances = np.concatenate(distances)
+indices = np.concatenate(indices)
+start_idx = 0
+weights = np.array([1.0, 0.7, 0.4, 0.3, 0.2, 
+                    1.0, 0.7, 0.4, 0.3, 0.2, 
+                    1.0, 0.7, 0.4, 0.3, 0.2,
+                    1.0, 0.7, 0.4, 0.3, 0.2, 
+                    1.0, 0.7, 0.4, 0.3, 0.2, 
+                    1.0, 0.7, 0.4, 0.3, 0.2,
+                    1.0, 0.7, 0.4, 0.3, 0.2, 
+                    1.0, 0.7, 0.4, 0.3, 0.2, 
+                    1.0, 0.7, 0.4, 0.3, 0.2,
+                    1.0, 0.7, 0.4, 0.3, 0.2, 
+                    1.0, 0.7, 0.4, 0.3, 0.2, 
+                    1.0, 0.7, 0.4, 0.3, 0.2])  # Example weights
+for audio, tag in tags:
+    end_idx = start_idx + len(tag)
+    distance = distances[start_idx:end_idx].reshape(-1)
+    weighted_distance = distance * weights[:len(distance)] # 5, 10, 15
+    indice = indices[start_idx:end_idx].reshape(-1)
+    sorted_indices = np.argsort(distance)
+    sorted_indice = indice[sorted_indices]
+    selected_indice = sorted_indice[:5]
+    retrieved_results[audio] = [(audio_filenames[i],audio_captions[i]) for i in selected_indice]
+    start_idx = end_idx
 
 # Save the results
 with open('retrieved_results.json', 'w') as f:
-    json.dump(retrieved_results, f)
+    json.dump(retrieved_results, f, indent=4)

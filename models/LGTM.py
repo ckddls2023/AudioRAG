@@ -26,13 +26,13 @@ class LGTM(nn.Module):
         config.add_cross_attention = True
         config.cross_attention_freq = 1
         config.query_length = num_latents # number of latents
-        self.audio2text_xattn = BertLMHeadModel(config=config) # cross-attention with text encoder
-        self.audio2text_xattn.cls = None
-        self.audio2text_xattn.bert.embeddings.word_embeddings = None
-        self.audio2text_xattn.bert.embeddings.position_embeddings = None
-        for layer in self.audio2text_xattn.bert.encoder.layer:
-            layer.output = None
-            layer.intermediate = None
+        #self.audio2text_xattn = BertLMHeadModel(config=config) # cross-attention with text encoder
+        #self.audio2text_xattn.cls = None
+        #self.audio2text_xattn.bert.embeddings.word_embeddings = None
+        #self.audio2text_xattn.bert.embeddings.position_embeddings = None
+        #for layer in self.audio2text_xattn.bert.encoder.layer:
+        #    layer.output = None
+        #    layer.intermediate = None
         self.token_merger = BertLMHeadModel(config=config)   # cross-attention with audio token
         self.token_merger.cls = None
         self.token_merger.bert.embeddings.word_embeddings = None
@@ -57,7 +57,7 @@ class LGTM(nn.Module):
         )
         text_embeds = text_encoder_output.last_hidden_state # [B,S,H]
         # Cross Attend to T5, single layer
-        output = self.audio2text_xattn.bert(
+        output = self.token_merger.bert(
             query_embeds=audio_embeds,  # [B,S,H]
             encoder_hidden_states=text_embeds,
             encoder_attention_mask=attention_mask,
@@ -71,8 +71,8 @@ class LGTM(nn.Module):
         logits_per_audio_feat = attention_score.max(-1)[0] # [B,S]
         token_index = torch.topk(logits_per_audio_feat, self.num_latents, dim=1)[1]
         sorted_index = torch.sort(token_index, dim=1)[0]
-        feat = output.last_hidden_state # Fused with text information
-        fused_embed = audio_text_embeds + audio_embeds
+        #fused_embed = audio_text_embeds + audio_embeds
+        fused_embed = audio_embeds
         audio_embed_query = fused_embed[torch.arange(B).unsqueeze(1), token_index]
         mask = torch.ones(B, S, dtype=torch.bool, device=audio_embeds.device) # Inverted index... other fancy way..?
         mask[torch.arange(B).unsqueeze(1), sorted_index] = False # This way is very slow compares to flops... painful..

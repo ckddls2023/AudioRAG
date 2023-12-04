@@ -66,8 +66,6 @@ class AudioLanguagePretrainDataset(Dataset):
         else:
             self.max_length = 0
             
-        self.audio_caption_map = {item["audio"]: item["caption"] for item in self.json_data}
-
         self.audio_cfg = {
             "audio_length": 1024,
             "clip_samples": 480000,
@@ -108,8 +106,8 @@ class AudioLanguagePretrainDataset(Dataset):
         retr_audio_features = []
         retr_captions = []
         if wav_path in self.retrieve_map:
-            retr_audio_features = [self.preprocess_waveform(retr_wav_path, duration) for retr_wav_path in self.retrieve_map[wav_path][:self.top_k]]
-            retr_captions = [text_preprocess(self.audio_caption_map[retr_wav_path]) for retr_wav_path in self.retrieve_map[wav_path][:self.top_k]]
+            retr_audio_features = [self.preprocess_waveform(retr_wav_path, duration) for (retr_wav_path, caption) in self.retrieve_map[wav_path][:self.top_k]]
+            retr_captions = [text_preprocess(caption) for (retr_wav_path, caption) in self.retrieve_map[wav_path][:self.top_k]]
         return audio_feature, caption, wav_path, retr_audio_features, retr_captions
 
 
