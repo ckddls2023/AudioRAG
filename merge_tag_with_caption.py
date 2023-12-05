@@ -20,7 +20,10 @@ for json_file in query_json_files:
         data = json.load(file)
     num_captions = data["num_captions_per_audio"]
     for entry in data["data"]:
-        caption = entry["caption"]
+        if num_captions > 1:
+            caption = min(entry["caption"], key=len)  # Choose the shortest caption
+        else:
+            caption = entry["caption"]  # Single caption
         command = base_command.format(caption)
         result = subprocess.run(command, shell=True, capture_output=True, text=True)
         print(result.stdout)
