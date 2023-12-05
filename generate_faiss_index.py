@@ -151,9 +151,9 @@ if not index_exists:
     #nlist = 512 # 32~512, trade-off between search time, nprobe=32~128
     #quantizer = faiss.IndexFlatL2(dim)
     #index_cpu = faiss.IndexIVFFlat(quantizer, dim, nlist) # Introduce very erronoues results
+    #training_samples = np.random.permutation(audio_embeds)[:29000] # Determine the number of training samples, typically ~10% of your dataset, 290k->29k
+    #index_cpu.train(training_samples)
     index_cpu = faiss.IndexFlatIP(dim)
-    training_samples = np.random.permutation(audio_embeds)[:29000] # Determine the number of training samples, typically ~10% of your dataset, 290k->29k
-    index_cpu.train(training_samples)
     index_cpu.add(audio_embeds)
     faiss.write_index(index_cpu, index_file_path)
 else:
@@ -244,18 +244,18 @@ indices = [elem[1] for elem in search_results]
 distances = np.concatenate(distances)
 indices = np.concatenate(indices)
 start_idx = 0
-weights = np.array([1.0, 0.7, 0.4, 0.3, 0.2, 
-                    1.0, 0.7, 0.4, 0.3, 0.2, 
-                    1.0, 0.7, 0.4, 0.3, 0.2,
-                    1.0, 0.7, 0.4, 0.3, 0.2, 
-                    1.0, 0.7, 0.4, 0.3, 0.2, 
-                    1.0, 0.7, 0.4, 0.3, 0.2,
-                    1.0, 0.7, 0.4, 0.3, 0.2, 
-                    1.0, 0.7, 0.4, 0.3, 0.2, 
-                    1.0, 0.7, 0.4, 0.3, 0.2,
-                    1.0, 0.7, 0.4, 0.3, 0.2, 
-                    1.0, 0.7, 0.4, 0.3, 0.2, 
-                    1.0, 0.7, 0.4, 0.3, 0.2])  # Example weights
+weights = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 
+                    1.0, 2.0, 3.0, 4.0, 5.0,
+                    1.0, 2.0, 3.0, 4.0, 5.0,
+                    1.0, 2.0, 3.0, 4.0, 5.0,
+                    1.0, 2.0, 3.0, 4.0, 5.0,
+                    1.0, 2.0, 3.0, 4.0, 5.0,
+                    1.0, 2.0, 3.0, 4.0, 5.0,
+                    1.0, 2.0, 3.0, 4.0, 5.0,
+                    1.0, 2.0, 3.0, 4.0, 5.0,
+                    1.0, 2.0, 3.0, 4.0, 5.0,
+                    1.0, 2.0, 3.0, 4.0, 5.0,
+                    1.0, 2.0, 3.0, 4.0, 5.0])  # Example weights
 for audio, tag in tags:
     end_idx = start_idx + len(tag)
     distance = distances[start_idx:end_idx].reshape(-1)

@@ -31,8 +31,8 @@ data_args:
 model_args:
   name: "CLAP2LLAMA"
   freeze_am: True
-  freeze_lm: True
-  checkpoint_path: "./pretrained_models/pretrained_LGTM/"
+  freeze_lm: False
+  checkpoint_path: "./pretrained_models/pretrained_MLP/"
   encoder:
     model_name: "CLAPAudioEncoder"
     pretrained: True
@@ -41,10 +41,10 @@ model_args:
     select_feature: "fine_grained_embedding"
     sequence_length: 1024
     hidden_size: 768
-    window_size: 8 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
-    step_size: 8
+    window_size: 32 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
+    step_size: 16
   align:
-    model_name: "LGTM"
+    model_name: "MLP"
   peft_config:
     r: 8
     lora_alpha: 16
@@ -56,21 +56,21 @@ model_args:
 
 # lr from wavcaps, linear scale lr
 optim_args:
-  lr: 1e-4
+  lr: 2e-5
   betas: [0.9, 0.99]
   eps: 1e-8
   momentum: 0.9
   gamma: 0.1
-  weight_decay: 0.0
+  weight_decay: 1e-6
 
 training:
   warmup_epochs: 2
   epochs: 10
   clip_grad: 2
-  output_path: "./finetuned_models/audio_caption_LGTM/"
-  eval: True
+  output_path: "./finetuned_models/audio_caption_MLP/"
+  eval: False
   validate: False
 
 index_args:
-  index_path: "./data/index/audio2audio_val.json"
+  index_path: "./data/index/audio2audio_train.json"
   top_k: 2

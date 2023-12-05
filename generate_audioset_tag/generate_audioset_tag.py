@@ -22,24 +22,24 @@ json_files = [
 ]
   
 
-@ray.remote(num_gpus=1)  # Assign one GPU to this actor
-class AudioSetTagPredictor:
-    def __init__(self, model_path):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        checkpoint = torch.load(model_path)
-        cfg = BEATsConfig(checkpoint['cfg'])
-        self.model = BEATs(cfg)
-        self.model.load_state_dict(checkpoint['model'])
-        self.model.eval()
-        self.model.to(self.device)
+# @ray.remote(num_gpus=1)  # Assign one GPU to this actor
+# class AudioSetTagPredictor:
+#     def __init__(self, model_path):
+#         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#         checkpoint = torch.load(model_path)
+#         cfg = BEATsConfig(checkpoint['cfg'])
+#         self.model = BEATs(cfg)
+#         self.model.load_state_dict(checkpoint['model'])
+#         self.model.eval()
+#         self.model.to(self.device)
 
-    def predict(self, batch):
-        batch_waveforms = batch['waveform'].copy()
-        batch_masks = batch['mask'].copy()
-        waveforms = torch.from_numpy(batch_waveforms).to(self.device)
-        padding_mask = torch.from_numpy(batch_masks).bool().to(self.device)
-        probs = self.model.extract_features(waveforms, padding_mask=padding_mask)[0]
-        return probs
+#     def predict(self, batch):
+#         batch_waveforms = batch['waveform'].copy()
+#         batch_masks = batch['mask'].copy()
+#         waveforms = torch.from_numpy(batch_waveforms).to(self.device)
+#         padding_mask = torch.from_numpy(batch_masks).bool().to(self.device)
+#         probs = self.model.extract_features(waveforms, padding_mask=padding_mask)[0]
+#         return probs
 
 def transform_audio(record):
     max_length = 16000*10
@@ -61,35 +61,35 @@ def get_gpu_count():
     return torch.cuda.device_count()
 
 num_gpus = get_gpu_count()
-predictor_actors = [AudioSetTagPredictor.remote('./BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt') for _ in range(num_gpus)]
+#predictor_actors = [AudioSetTagPredictor.remote('./BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt') for _ in range(num_gpus)]
 
 
-for json_file in json_files:
+# for json_file in json_files:
     
-    with open(json_file, 'r') as file:
-        data = json.load(file)
+#     with open(json_file, 'r') as file:
+#         data = json.load(file)
     
-    dataset = from_items(data["data"])
-    transformed_dataset = dataset.map(transform_audio)
-    result_refs = []
-    for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=16)):
-        actor = predictor_actors[i % num_gpus]
-        result_refs.append(actor.predict.remote(batch))
-    result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
-    predict_results = torch.cat(result_list, dim=0) # [(B,K), (B,K)...] -> (total_samples, K=527)
-    for entry, prediction in zip(data["data"], predict_results):
-        top_probs, top_indices = prediction.topk(k=3)
-        top_labels = [id2label[str(idx.item())] for idx in top_indices]
-        entry["tag"] = top_labels # Save it as list
+#     dataset = from_items(data["data"])
+#     transformed_dataset = dataset.map(transform_audio)
+#     result_refs = []
+#     for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=16)):
+#         actor = predictor_actors[i % num_gpus]
+#         result_refs.append(actor.predict.remote(batch))
+#     result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
+#     predict_results = torch.cat(result_list, dim=0) # [(B,K), (B,K)...] -> (total_samples, K=527)
+#     for entry, prediction in zip(data["data"], predict_results):
+#         top_probs, top_indices = prediction.topk(k=3)
+#         top_labels = [id2label[str(idx.item())] for idx in top_indices]
+#         entry["tag"] = top_labels # Save it as list
 
-    with open(json_file, 'w') as file:
-        json.dump(data, file, indent=4)
+#     with open(json_file, 'w') as file:
+#         json.dump(data, file, indent=4)
 
-print("JSON files have been processed and saved with tags.")
+# print("JSON files have been processed and saved with tags.")
 
-# Terminate the AudioSetTagPredictor actors
-for actor in predictor_actors:
-    ray.kill(actor)
+# # Terminate the AudioSetTagPredictor actors
+# for actor in predictor_actors:
+#     ray.kill(actor)
 
 @ray.remote(num_gpus=1)
 class AudioSeparator:

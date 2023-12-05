@@ -26,14 +26,15 @@ for json_file in query_json_files:
             caption = entry["caption"]  # Single caption
         command = base_command.format(caption)
         result = subprocess.run(command, shell=True, capture_output=True, text=True)
-        print(result.stdout)
         if result.returncode == 0:
             # Split the output to extract the part after "### Response:"
             parts = result.stdout.split("### Response:")
             if len(parts) > 1:
-                response = parts[1].strip()  # Remove any leading/trailing whitespace
-                tags = [tag.strip() for tag in response]
+                tags = parts[1].strip().split(',')  # Remove any leading/trailing whitespace
                 entry["tag"] = tags
+            else:
+                print(f"{entry['audio'] =} are not correctly processed")
+                print(result.stdout)
                 
     with open(json_file, 'w') as outfile:
         json.dump(data, outfile, indent=4)
