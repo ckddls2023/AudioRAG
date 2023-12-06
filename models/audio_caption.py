@@ -106,10 +106,14 @@ class CLAP2LLAMA(nn.Module):
             for param in self.decoder.parameters():
                 param.requires_grad = False
         else:
-            self.peft_config = LoraConfig(**config.peft_config)
+            peft_type = config.peft_config.pop('type', None)
+            if peft_type == "LORA":
+                self.peft_config = LoraConfig(**config.peft_config)
+            if peft_type == "IA3":
+                self.peft_config = IA3Config(**config.peft_config)
             self.decoder = get_peft_model(self.decoder, self.peft_config)
-            self.decoder.base_model.model.model.embed_tokens.original_module.weight.requires_grad = False
-            self.decoder.base_model.model.lm_head.original_module.weight.requires_grad = False
+            #self.decoder.base_model.model.model.embed_tokens.original_module.weight.requires_grad = False
+            #self.decoder.base_model.model.lm_head.original_module.weight.requires_grad = False
             self.decoder.print_trainable_parameters()
 
 
@@ -155,7 +159,7 @@ class CLAP2LLAMA(nn.Module):
         batch_size, seq_length = input_ids.shape
         shifted_input_ids = input_ids.new_zeros((batch_size, seq_length + prefix_length))
         shifted_input_ids[:, prefix_length:] = input_ids.clone()
-        shifted_input_ids[:, :prefix_length] = -100
+        #shifted_input_ids[:, :prefix_length] = -100
         shifted_input_ids.masked_fill_(shifted_input_ids == self.tokenizer.pad_token_id, -100)
         shifted_attn_mask = attn_mask.new_zeros((batch_size, seq_length + prefix_length))
         shifted_attn_mask[:, prefix_length:] = attn_mask.clone()

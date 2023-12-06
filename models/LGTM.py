@@ -42,6 +42,8 @@ class LGTM(nn.Module):
             layer.intermediate = None
         self.temperature = 0.2
         self.projection_head = nn.Linear(hidden_size, hidden_size, bias=False) # From SimSiam
+        self.audio_query_tokens = nn.Parameter(torch.zeros(1, 64, self.hidden_size))
+        self.audio_query_tokens.data.normal_(mean=0.0, std=config.initializer_range)
 
     def forward(self, audio_embeds, caption):
         # Embed text using T5 encoder
@@ -80,19 +82,19 @@ class LGTM(nn.Module):
         attn_mask = torch.ones(audio_embed_key_value.size()[:-1], dtype=torch.long).to(audio_embeds.device)
         # Self token merger
         output = self.token_merger.bert(
-            query_embeds=audio_embed_query, # [B,64,H]
+            query_embeds=audio_embed_query++self.audio_query_tokens, # [B,64,H]
             encoder_hidden_states=audio_embed_key_value, # [B,S-64,H]
             encoder_attention_mask=attn_mask, # [B,S-64,H]
             return_dict=True,
         )
         #return output, None
         # ATC : Audio-Text Contrastive Alignment, add loss as auxilarity loss, no contrastive, SimSiam
-        pooled_text_embeds = torch.mean(text_embeds, dim=1) 
-        projected_audio_embeds = self.projection_head(output.last_hidden_state)
-        pooled_audio_embeds = torch.mean(projected_audio_embeds, dim=1) # [B.H]
-        cos_sim = F.cosine_similarity(pooled_audio_embeds[None, :], pooled_text_embeds[:, None], dim=-1)
-        pos_mask = torch.eye(cos_sim.shape[0], dtype=torch.bool, device=cos_sim.device)
-        cos_sim = cos_sim / self.temperature
-        nll = -cos_sim[pos_mask]
-        nll = nll.mean()
+        #pooled_text_embeds = torch.mean(text_embeds, dim=1) 
+        #projected_audio_embeds = self.projection_head(output.last_hidden_state)
+        #pooled_audio_embeds = torch.mean(projected_audio_embeds, dim=1) # [B.H]
+        #cos_sim = F.cosine_similarity(pooled_audio_embeds[None, :], pooled_text_embeds[:, None], dim=-1)
+        #pos_mask = torch.eye(cos_sim.shape[0], dtype=torch.bool, device=cos_sim.device)
+        #cos_sim = cos_sim / self.temperature
+        #nll = -cos_sim[pos_mask]
+        #nll = nll.mean()
         return output, nll

@@ -46,17 +46,24 @@ model_args:
   align:
     model_name: "MLP"
   peft_config:
+    type: "LORA"
     r: 8
     lora_alpha: 16
-    lora_dropout: 0.05
+    lora_dropout: 0.1
     bias: "none"
     task_type: "CAUSAL_LM"
     modules_to_save: ['lm_head', 'embed_tokens']
     target_modules: ["q_proj", "v_proj"]
+  # peft_config:
+  #   type: "IA3"
+  #   peft_type: "IA3"
+  #   task_type: "CAUSAL_LM"
+  #   target_modules: ["q_proj", "v_proj", "down_proj"]
+  #   feedforward_modules: ["down_proj"]
 
 # lr from wavcaps, linear scale lr
 optim_args:
-  lr: 2e-5
+  lr: 1e-4
   betas: [0.9, 0.99]
   eps: 1e-8
   momentum: 0.9
@@ -67,10 +74,10 @@ training:
   warmup_epochs: 2
   epochs: 10
   clip_grad: 2
-  output_path: "./finetuned_models/audio_caption_MLP/"
+  output_path: "./finetuned_models/finetuned_MLP/"
   eval: False
   validate: False
-
+  
 index_args:
-  index_path: "./data/index/audio2audio_train.json"
+  index_path: ""
   top_k: 2

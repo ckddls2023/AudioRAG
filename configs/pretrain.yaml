@@ -35,7 +35,7 @@ model_args:
   name: "CLAP2LLAMA"
   freeze_am: True
   freeze_lm: True
-  checkpoint_path: ""
+  checkpoint_path: "./pretrained_models/audio_caption_LGTM/"
   encoder:
     model_name: "CLAPAudioEncoder"
     pretrained: True
@@ -71,7 +71,7 @@ training:
   epochs: 5
   clip_grad: 2
   output_path: "./pretrained_models/audio_caption_LGTM/"
-  eval: False
+  eval: True
   validate: False
 
 index_args:
