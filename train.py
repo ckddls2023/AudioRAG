@@ -101,6 +101,8 @@ def validate(data_loader, model, epoch):
         accelerator.log(metrics_all)
         accelerator.print(metrics_all)
         return metrics_all
+    else:
+        return None
 
 
 def main():
@@ -136,7 +138,7 @@ def main():
     for epoch in range(1, config.training.epochs + 1): # 1~10
         train_statics = train(model, train_dataloader, optimizer, scheduler, epoch, config.training.clip_grad)
         if config.training.validate: # Load checkpoint & Eval only,
-            validate(val_dataloader, model, epoch)
+            metrics = validate(val_dataloader, model, epoch)
             if accelerator.is_main_process:
                 spiders.append(metrics["spider"])
                 save_ckpt = metrics["spider"] >= max(spiders) 
