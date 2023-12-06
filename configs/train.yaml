@@ -2,16 +2,9 @@ exp_name: 'train'
 seed: 20
 
 train_jsons: [
-  'data/json_files/BBC_Sound_Effects/bbc_final.json',
-  'data/json_files/FreeSound/fsd_final.json',
-  'data/json_files/SoundBible/sb_final.json',
-  "data/json_files/AudioSet_SL/as_final.json",
-  #"data/json_files/Clotho/clotho_final.json"
+  'data/json_files/AudioSet/train.json',
+  'data/json_files/Clotho/train.json',
 ]
-# train_jsons: [
-#   'data/json_files/AudioSet/train.json',
-#   'data/json_files/Clotho/train.json',
-# ]
 val_jsons: [
   "data/json_files/AudioSet/val.json",
 ]
