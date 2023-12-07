@@ -65,6 +65,7 @@ def validate(data_loader, model, epoch):
     model.eval()
     sacrebleu = evaluate.load("sacrebleu")
     meteor = evaluate.load("meteor")
+    rouge = evaluate.load("rouge")
     spice = SpiceMetric()
     cider = CiderMetric()
     unwrapped_model = accelerator.unwrap_model(model)
@@ -91,12 +92,14 @@ def validate(data_loader, model, epoch):
             ref_captions = [[caption] for caption in ref_captions] # List of list, val or test may include 5 captions
         spice_score = spice.compute(predictions=gen_captions, references=ref_captions, tokens=tokens)
         cider_score = cider.compute(predictions=gen_captions, references=ref_captions, tokens=tokens)
+        rouge_score = rouge.compute(predictions=gen_captions, references=ref_captions, tokens=tokens)
         spider_score = 0.5 * (spice_score['average_score'] + cider_score['score'])
         metrics_all = {
             "sacrebleu": sacrebleu_score['score'],
             "meteor": meteor_score['meteor'],
             "spice": spice_score['average_score'],
             "cider": cider_score['score'],
+            "rougeL": rouge_score['rougeL'],
             "spider": spider_score,
         }
         accelerator.log(metrics_all)

@@ -34,16 +34,7 @@ def load_json_file(files, blacklist=None, train=True):
                         continue
                 if item["duration"] > 40.0:  # Avoid too much long audios
                     continue
-                if train:
-                    if isinstance(item["caption"], list):
-                        for i in range(json_obj["num_captions_per_audio"]):
-                            temp_dict = {"audio": item["audio"], "caption": item["caption"][i], "id": audio_id,
-                                         "duration": item["duration"]}
-                            json_data.append(temp_dict)
-                    else:
-                        json_data.append(item)
-                else:
-                    json_data.append(item)
+                json_data.append(item)
                 audio_id += 1
     return json_data
 
@@ -102,7 +93,10 @@ class AudioLanguagePretrainDataset(Dataset):
         wav_path = item["audio"]
         duration = item["duration"]
         audio_feature = self.preprocess_waveform(wav_path, duration)
-        caption = text_preprocess(item["caption"])
+        caption = item["caption"]
+        if isinstance(caption, list):
+            caption = random.choice(item["caption"])
+        caption = text_preprocess(caption)
         retr_audio_features = []
         retr_captions = []
         if wav_path in self.retrieve_map:
