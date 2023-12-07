@@ -48,13 +48,13 @@ model_args:
     model_name: "MLP"
   peft_config:
     type: "LORA"
-    r: 8
+    r: 16
     lora_alpha: 16
     lora_dropout: 0.1
     bias: "none"
     task_type: "CAUSAL_LM"
     modules_to_save: ['lm_head', 'embed_tokens']
-    target_modules: ["q_proj", "v_proj"]
+    target_modules: ["q_proj", "v_proj", "k_proj","o_proj"]
   # peft_config:
   #   type: "IA3"
   #   peft_type: "IA3"
@@ -69,7 +69,7 @@ optim_args:
   eps: 1e-8
   momentum: 0.9
   gamma: 0.1
-  weight_decay: 1e-6
+  weight_decay: 0.001
 
 training:
   warmup_epochs: 2

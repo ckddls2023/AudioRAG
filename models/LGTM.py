@@ -82,7 +82,7 @@ class LGTM(nn.Module):
         attn_mask = torch.ones(audio_embed_key_value.size()[:-1], dtype=torch.long).to(audio_embeds.device)
         # Self token merger
         output = self.token_merger.bert(
-            query_embeds=audio_embed_query++self.audio_query_tokens, # [B,64,H]
+            query_embeds=audio_embed_query+self.audio_query_tokens, # [B,64,H]
             encoder_hidden_states=audio_embed_key_value, # [B,S-64,H]
             encoder_attention_mask=attn_mask, # [B,S-64,H]
             return_dict=True,
@@ -96,5 +96,8 @@ class LGTM(nn.Module):
         #pos_mask = torch.eye(cos_sim.shape[0], dtype=torch.bool, device=cos_sim.device)
         #cos_sim = cos_sim / self.temperature
         #nll = -cos_sim[pos_mask]
-        #nll = nll.mean()
-        return output, nll
+        #loss = nll.mean()
+        x = F.normalize(audio_embeds, p=2, dim=-1) # B, S, H
+        y = F.normalize(audio_text_embeds, p=2, dim=-1) # B, H, S
+        loss = 2 - 2 * (x * y).sum(dim=-1).mean()
+        return output, loss

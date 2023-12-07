@@ -9,7 +9,7 @@ query_json_files = [
 ]
 base_command = "~/dev/DL/llama.cpp/main -t 10 -ngl 40 -m ~/.cache/checkpoints/openorca-platypus2-13b.Q5_K_S.gguf \
 -c 2048 --temp 0.7 --repeat_penalty 1.1 -n -1 -p \"### Instruction: Your role is break down complex 'sentence' to easy sentences with delimeter ','. \
-When you break down sentences, write sentences as short one. Drop sentence meaning less one. \
+When you break down sentences, write sentences as short one. Drop sentence meaning less such as 'needs oil','pops','gravel path','cutting'. \
 This is examples of break down sentences. \
 'Birds chirp and a pop occurs before a man speaks' can be broken down into two sentences. 'Bird chirp, A man speaks'. \
 'A vehicle revving in the distance followed by a man shouting in the distance then a vehicle engine running idle before accelerating and driving off' can be broken down into two sentences. 'A vehicle revving, man shouting, driving off'. \
