@@ -71,7 +71,7 @@ training:
   epochs: 5
   clip_grad: 2
   output_path: "./pretrained_models/audio_caption_LGTM/"
-  eval: True
+  eval: False
   validate: False
 
 index_args:

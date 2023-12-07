@@ -1,10 +1,10 @@
 import json
 import subprocess
 
+#'./data/json_files/AudioSet/val.json', # Human labeled, don't touch
+#  './data/json_files/Clotho/val.json',
+#  './data/json_files/Clotho/train.json',
 query_json_files = [
-  #'./data/json_files/AudioSet/val.json',
-  './data/json_files/Clotho/val.json',
-  './data/json_files/Clotho/train.json',
   './data/json_files/AudioSet/train.json',
 ]
 base_command = "~/dev/DL/llama.cpp/main -t 10 -ngl 40 -m ~/.cache/checkpoints/openorca-platypus2-13b.Q5_K_S.gguf \

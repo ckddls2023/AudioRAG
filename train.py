@@ -79,6 +79,7 @@ def validate(data_loader, model, epoch):
         with accelerator.autocast():
             gen_caption = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_captions=retr_captions)
             print(gen_caption)
+            print(caption)
             gen_captions.extend(gen_caption)
             ref_captions.extend(caption)
     if accelerator.is_main_process:

@@ -87,7 +87,7 @@ class LGTM(nn.Module):
             encoder_attention_mask=attn_mask, # [B,S-64,H]
             return_dict=True,
         )
-        #return output, None
+        return output, None
         # ATC : Audio-Text Contrastive Alignment, add loss as auxilarity loss, no contrastive, SimSiam
         #pooled_text_embeds = torch.mean(text_embeds, dim=1) 
         #projected_audio_embeds = self.projection_head(output.last_hidden_state)
@@ -97,7 +97,7 @@ class LGTM(nn.Module):
         #cos_sim = cos_sim / self.temperature
         #nll = -cos_sim[pos_mask]
         #loss = nll.mean()
-        x = F.normalize(audio_embeds, p=2, dim=-1) # B, S, H
-        y = F.normalize(audio_text_embeds, p=2, dim=-1) # B, H, S
-        loss = 2 - 2 * (x * y).sum(dim=-1).mean()
-        return output, loss
+        #x = F.normalize(audio_embeds, p=2, dim=-1) # B, S, H
+        #y = F.normalize(audio_text_embeds, p=2, dim=-1) # B, H, S
+        #loss = 2 - 2 * (x * y).sum(dim=-1).mean()
+        #return output, loss

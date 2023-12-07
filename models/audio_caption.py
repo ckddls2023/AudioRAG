@@ -166,8 +166,8 @@ class CLAP2LLAMA(nn.Module):
         shifted_attn_mask[:, :prefix_length] = 1
         return shifted_input_ids, shifted_attn_mask
 
-    def prepare_text_input(self, caption, device):
-        tokenized_text = self.tokenizer(caption, padding='longest', truncation=True, return_tensors="pt")
+    def prepare_text_input(self, caption, device, add_special_tokens=True):
+        tokenized_text = self.tokenizer(caption, padding='longest', truncation=True, return_tensors="pt", add_special_tokens=add_special_tokens)
         input_ids = tokenized_text["input_ids"].to(device)
         attn_mask = tokenized_text["attention_mask"].to(device)
         return input_ids, attn_mask
@@ -178,13 +178,18 @@ class CLAP2LLAMA(nn.Module):
         shifted_input_ids, shifted_attn_mask = self.shift_and_pad_input(input_ids, attn_mask, audio_embed.shape[1])
         if retr_audio_embeds:
             for retr_audio_embed, retr_caption in zip(retr_audio_embeds, retr_captions):
-                retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_caption, audio_embed.device)
+                retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_caption, audio_embed.device, add_special_tokens=False)
                 retr_input_embeds = torch.cat((retr_audio_embed, self.get_decoder_embeddings()(retr_input_ids[:,:-1])), dim=1) # Remove EOS token
                 shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(retr_input_ids[:,:-1], retr_attn_mask[:,:-1], retr_audio_embed.shape[1]) 
-                shifted_retr_ids[:,:] = -100 # Ignore all Wavcaps style
+                # shifted_retr_ids[:,:] = -100 # Ignore all Wavcaps style
                 input_embeds = torch.cat((retr_input_embeds, input_embeds), dim=1)
                 shifted_input_ids = torch.cat((shifted_retr_ids, shifted_input_ids), dim=1)
                 shifted_attn_mask = torch.cat((shifted_retr_mask, shifted_attn_mask), dim=1)
+        # bos = torch.ones([input_embeds.shape[0], 1],dtype=input_ids.dtype, device=audio_embed.device) * self.tokenizer.bos_token_id
+        # bos_embeds = self.get_decoder_embeddings()(bos)
+        # atts_bos = shifted_attn_mask[:, :1]
+        # input_embeds = torch.cat((bos_embeds, input_embeds), dim=1)
+        # shifted_attn_mask = torch.cat((atts_bos, shifted_attn_mask), dim=1)
         output = self.decoder(inputs_embeds=input_embeds, labels=shifted_input_ids, attention_mask=shifted_attn_mask)
         return output
 
@@ -257,7 +262,9 @@ class CLAP2LLAMA(nn.Module):
                 min_length=0,
                 max_length=256,
                 top_p=0.9,
+                do_sample=True,
                 repetition_penalty=1.1,
+                use_cache=True,
                 #generation_config=self.generation_config,
             )
             captions = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)

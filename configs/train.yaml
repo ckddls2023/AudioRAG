@@ -7,6 +7,7 @@ train_jsons: [
 ]
 val_jsons: [
   "data/json_files/AudioSet/val.json",
+  #"data/json_files/Clotho/val.json",
 ]
 blacklist: ""
 # dataset == 'AudioCaps': sampling_rate = 32000
@@ -33,6 +34,7 @@ model_args:
   name: "CLAP2LLAMA"
   freeze_am: True
   freeze_lm: False
+  #checkpoint_path: "finetuned_models/finetuned_MLP_wd_0.001_r16_a16/"
   checkpoint_path: "./pretrained_models/pretrained_MLP/"
   encoder:
     model_name: "CLAPAudioEncoder"
@@ -48,19 +50,19 @@ model_args:
     model_name: "MLP"
   peft_config:
     type: "LORA"
-    r: 16
-    lora_alpha: 16
+    r: 64
+    lora_alpha: 32
     lora_dropout: 0.1
     bias: "none"
     task_type: "CAUSAL_LM"
     modules_to_save: ['lm_head', 'embed_tokens']
     target_modules: ["q_proj", "v_proj", "k_proj","o_proj"]
-  # peft_config:
-  #   type: "IA3"
-  #   peft_type: "IA3"
-  #   task_type: "CAUSAL_LM"
-  #   target_modules: ["q_proj", "v_proj", "down_proj"]
-  #   feedforward_modules: ["down_proj"]
+#  peft_config:
+#    type: "IA3"
+#    peft_type: "IA3"
+#    task_type: "CAUSAL_LM"
+#    target_modules: ["q_proj", "v_proj", "down_proj"]
+#    feedforward_modules: ["down_proj"]
 
 # lr from wavcaps, linear scale lr
 optim_args:
@@ -69,14 +71,14 @@ optim_args:
   eps: 1e-8
   momentum: 0.9
   gamma: 0.1
-  weight_decay: 0.001
+  weight_decay: 0.01
 
 training:
   warmup_epochs: 2
   epochs: 10
   clip_grad: 2
   output_path: "./finetuned_models/finetuned_MLP/"
-  eval: False
+  eval: True
   validate: False
   
 index_args:
