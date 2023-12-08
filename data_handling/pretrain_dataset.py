@@ -101,8 +101,11 @@ class AudioLanguagePretrainDataset(Dataset):
         retr_audio_features = []
         retr_captions = []
         if wav_path in self.retrieve_map:
-            retr_audio_features = [self.preprocess_waveform(retr_wav_path, duration) for (retr_wav_path, caption) in self.retrieve_map[wav_path][:self.top_k]]
-            retr_captions = [text_preprocess(caption) for (retr_wav_path, caption) in self.retrieve_map[wav_path][:self.top_k]]
+            retrieve_items = self.retrieve_map[wav_path]
+            weights = list(range(len(retrieve_items), 0, -1))
+            selected_items = random.choices(retrieve_items, weights=weights, k=self.top_k)
+            retr_audio_features = [self.preprocess_waveform(retr_wav_path, duration) for (retr_wav_path, caption) in selected_items]
+            retr_captions = [text_preprocess(caption) for (retr_wav_path, caption) in selected_items]
         return audio_feature, caption, wav_path, retr_audio_features, retr_captions
 
 

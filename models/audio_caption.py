@@ -269,7 +269,7 @@ class CLAP2LLAMA(nn.Module):
                 attention_mask=shifted_attn_mask,
                 num_beams=2,
                 min_length=0,
-                max_length=128,
+                max_length=256,
                 top_p=0.9,
                 do_sample=True,
                 repetition_penalty=1.1,
