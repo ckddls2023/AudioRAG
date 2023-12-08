@@ -34,8 +34,9 @@ data_args:
 model_args:
   name: "CLAP2LLAMA"
   freeze_am: True
+  unfreeze_am: []
   freeze_lm: True
-  checkpoint_path: "./pretrained_models/audio_caption_LGTM/"
+  checkpoint_path: ""
   encoder:
     model_name: "CLAPAudioEncoder"
     pretrained: True
@@ -48,14 +49,6 @@ model_args:
     step_size: 8
   align:
     model_name: "LGTM"
-  peft_config:
-    r: 8
-    lora_alpha: 16
-    lora_dropout: 0.05
-    bias: "none"
-    task_type: "CAUSAL_LM"
-    modules_to_save: ['lm_head', 'embed_tokens']
-    target_modules: ["q_proj", "v_proj"]
 
 
 optim_args:
@@ -75,5 +68,6 @@ training:
   validate: False
 
 index_args:
-  index_path: ""
+  index_path: "./data/index/final_index_big_kb/audio2audio_train.json"
+  #index_path: "./data/index/final_index_big_kb/audio2audio_val.json"
   top_k: 2

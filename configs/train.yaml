@@ -33,9 +33,12 @@ data_args:
 model_args:
   name: "CLAP2LLAMA"
   freeze_am: True
+  unfreeze_am: ['model.audio_branch.layers.3.blocks.1']
+  #unfreeze_am: []
   freeze_lm: False
+  #checkpoint_path: "finetuned_models/finetuned_MLP_wd_0.01_r64_a32/"
   #checkpoint_path: "finetuned_models/finetuned_MLP_wd_0.001_r16_a16/"
-  checkpoint_path: "./pretrained_models/pretrained_MLP/"
+  #checkpoint_path: "./pretrained_models/pretrained_MLP/"
   encoder:
     model_name: "CLAPAudioEncoder"
     pretrained: True
@@ -50,7 +53,7 @@ model_args:
     model_name: "MLP"
   peft_config:
     type: "LORA"
-    r: 64
+    r: 16
     lora_alpha: 32
     lora_dropout: 0.1
     bias: "none"
@@ -71,7 +74,7 @@ optim_args:
   eps: 1e-8
   momentum: 0.9
   gamma: 0.1
-  weight_decay: 0.01
+  weight_decay: 0.001
 
 training:
   warmup_epochs: 2

@@ -41,9 +41,11 @@ class LGTM(nn.Module):
             layer.output = None
             layer.intermediate = None
         self.temperature = 0.2
-        self.projection_head = nn.Linear(hidden_size, hidden_size, bias=False) # From SimSiam
+        #self.projection_head = nn.Linear(hidden_size, hidden_size, bias=False) # From SimSiam
         self.audio_query_tokens = nn.Parameter(torch.zeros(1, 64, self.hidden_size))
         self.audio_query_tokens.data.normal_(mean=0.0, std=config.initializer_range)
+        self.ln_audio = nn.LayerNorm(self.hidden_size, eps=1e-12)
+        self.ln_text = nn.LayerNorm(self.hidden_size, eps=1e-12)
 
     def forward(self, audio_embeds, caption):
         # Embed text using T5 encoder
@@ -58,6 +60,7 @@ class LGTM(nn.Module):
             return_dict=True
         )
         text_embeds = text_encoder_output.last_hidden_state # [B,S,H]
+        text_embeds = self.ln_text(text_embeds) # LayerNorm
         # Cross Attend to T5, single layer
         output = self.token_merger.bert(
             query_embeds=audio_embeds,  # [B,S,H]
@@ -74,6 +77,7 @@ class LGTM(nn.Module):
         token_index = torch.topk(logits_per_audio_feat, self.num_latents, dim=1)[1]
         sorted_index = torch.sort(token_index, dim=1)[0]
         #fused_embed = audio_text_embeds + audio_embeds
+        audio_embeds = self.ln_audio(audio_embeds) # LayerNorm
         fused_embed = audio_embeds
         audio_embed_query = fused_embed[torch.arange(B).unsqueeze(1), token_index]
         mask = torch.ones(B, S, dtype=torch.bool, device=audio_embeds.device) # Inverted index... other fancy way..?
@@ -87,11 +91,16 @@ class LGTM(nn.Module):
             encoder_attention_mask=attn_mask, # [B,S-64,H]
             return_dict=True,
         )
-        return output, None
+        # return output, None
         # ATC : Audio-Text Contrastive Alignment, add loss as auxilarity loss, no contrastive, SimSiam
-        #pooled_text_embeds = torch.mean(text_embeds, dim=1) 
+        labels = torch.arange(audio_embeds.shape[0], device=audio_embeds.device, dtype=torch.long)
+        #pooled_text_embeds = torch.mean(text_embeds, dim=1)  # B, H
+        pooled_audio_text_embeds = torch.mean(audio_text_embeds, dim=1)  # B, H
         #projected_audio_embeds = self.projection_head(output.last_hidden_state)
         #pooled_audio_embeds = torch.mean(projected_audio_embeds, dim=1) # [B.H]
+        pooled_audio_embeds = torch.mean(output.last_hidden_state, dim=1) # [B.H]
+        logits_per_audio = pooled_audio_embeds @ pooled_audio_text_embeds.T
+        logits_per_text = pooled_audio_text_embeds @ pooled_audio_embeds.T 
         #cos_sim = F.cosine_similarity(pooled_audio_embeds[None, :], pooled_text_embeds[:, None], dim=-1)
         #pos_mask = torch.eye(cos_sim.shape[0], dtype=torch.bool, device=cos_sim.device)
         #cos_sim = cos_sim / self.temperature
@@ -100,4 +109,8 @@ class LGTM(nn.Module):
         #x = F.normalize(audio_embeds, p=2, dim=-1) # B, S, H
         #y = F.normalize(audio_text_embeds, p=2, dim=-1) # B, H, S
         #loss = 2 - 2 * (x * y).sum(dim=-1).mean()
-        #return output, loss
+        total_loss = (
+            F.cross_entropy(logits_per_audio, labels) +
+            F.cross_entropy(logits_per_text, labels)
+        ) / 2
+        return output, total_loss

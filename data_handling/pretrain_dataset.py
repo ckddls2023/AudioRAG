@@ -44,6 +44,7 @@ class AudioLanguagePretrainDataset(Dataset):
     def __init__(self, json_files, audio_config, blacklist=None, train=True, retrieve_map="", top_k=2):
 
         self.json_data = load_json_file(json_files, blacklist, train)
+        self.train = train
         self.lengths = [item["duration"] for item in self.json_data]
         self.top_k = top_k
         self.retrieve_map = {}
@@ -94,7 +95,7 @@ class AudioLanguagePretrainDataset(Dataset):
         duration = item["duration"]
         audio_feature = self.preprocess_waveform(wav_path, duration)
         caption = item["caption"]
-        if isinstance(caption, list):
+        if self.train and isinstance(caption, list):
             caption = random.choice(item["caption"])
         caption = text_preprocess(caption)
         retr_audio_features = []

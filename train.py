@@ -39,6 +39,8 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0):
     start_time = time.time()
     for batch_id, (audio, caption, audio_filenames, retr_audios, retr_captions) in enumerate(pbar := tqdm(dataloader, total=len(dataloader))):
         iter_time = time.time() - start_time
+        retr_audios = [] # Force to only put captions for LGTM
+        #retr_captions = [[texts[0] for texts in caption]]
         with accelerator.accumulate(model):
             optimizer.zero_grad()
             step = len(dataloader) * (epoch - 1) + batch_id
@@ -75,8 +77,8 @@ def validate(data_loader, model, epoch):
         audio, caption, audio_names, retr_audios, retr_captions = batch_data
         if not retr_captions: # If retrieved results is missing, num_captions = 5, choose 1
             retr_captions = [[texts[0] for texts in caption]]
-        retr_audios = [] # Force to only put captions
-        retr_captions = [[texts[0] for texts in caption]]
+        #retr_audios = [] # Force to only put captions
+        #retr_captions = [[texts[0] for texts in caption]]
         with accelerator.autocast():
             gen_caption = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_captions=retr_captions)
             print(gen_caption)
@@ -92,7 +94,7 @@ def validate(data_loader, model, epoch):
             ref_captions = [[caption] for caption in ref_captions] # List of list, val or test may include 5 captions
         spice_score = spice.compute(predictions=gen_captions, references=ref_captions, tokens=tokens)
         cider_score = cider.compute(predictions=gen_captions, references=ref_captions, tokens=tokens)
-        rouge_score = rouge.compute(predictions=gen_captions, references=ref_captions, tokens=tokens)
+        rouge_score = rouge.compute(predictions=gen_captions, references=ref_captions)
         spider_score = 0.5 * (spice_score['average_score'] + cider_score['score'])
         metrics_all = {
             "sacrebleu": sacrebleu_score['score'],

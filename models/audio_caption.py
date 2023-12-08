@@ -92,13 +92,16 @@ class CLAP2LLAMA(nn.Module):
             self.forward_align = self.forward_lgtm
 
         self.freeze_am = config.freeze_am
+        self.unfreeze_am = config.unfreeze_am
         self.freeze_lm = config.freeze_lm
 
         # Freeze all CLAP parameters
         self.decoder.gradient_checkpointing_enable()
         if self.freeze_am:
-            for p in self.encoder.parameters():
+            for name, p in self.encoder.named_parameters():
                 p.requires_grad = False
+                if any(name.startswith(prefix) for prefix in config.unfreeze_am):
+                    p.requires_grad = True
 
         # Freeze all LM parameters
         if self.freeze_lm:
@@ -219,6 +222,8 @@ class CLAP2LLAMA(nn.Module):
             full_state_dict = self.enc_to_dec_proj.state_dict()
             filtered_state_dict = {k: v for k, v in full_state_dict.items() if 'text_encoder' not in k}
             torch.save(filtered_state_dict, checkpoint_path + "enc_to_dec_proj.bin")
+        if self.unfreeze_am:
+            torch.save(self.encoder.state_dict(), checkpoint_path + "audio_encoder.bin")
         if not self.freeze_lm:
             self.decoder.save_pretrained(checkpoint_path)
 
@@ -230,6 +235,10 @@ class CLAP2LLAMA(nn.Module):
             self.decoder_proj.load_state_dict(torch.load(checkpoint_path + "decoder_proj.bin"), strict = True)
         if self.config.align.model_name == "LGTM":
             self.enc_to_dec_proj.load_state_dict(torch.load(checkpoint_path+"enc_to_dec_proj.bin"), strict=False)
+        if self.unfreeze_am:
+            file_path = os.path.join(checkpoint_path, "audio_encoder.bin")
+            if os.path.exists(file_path):
+                self.encoder.load_state_dict(torch.load(file_path), strict=False)
         if not self.freeze_lm and 'finetuned' in checkpoint_path:
             print("Load LORA model")
             self.decoder = PeftModel.from_pretrained(self.decoder.base_model, checkpoint_path, config=self.peft_config)  # suppose don't use get_peft_model
@@ -260,7 +269,7 @@ class CLAP2LLAMA(nn.Module):
                 attention_mask=shifted_attn_mask,
                 num_beams=2,
                 min_length=0,
-                max_length=256,
+                max_length=128,
                 top_p=0.9,
                 do_sample=True,
                 repetition_penalty=1.1,
