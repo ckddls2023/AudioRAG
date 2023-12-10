@@ -7,7 +7,7 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, LlamaForCausalLM, LlamaTokenizer, GPT2Config, LlamaConfig, GenerationConfig
-from peft import LoraConfig, TaskType, IA3Config, get_peft_model, get_peft_model_state_dict, PeftModel, PeftConfig
+from peft import LoraConfig, TaskType, IA3Config, get_peft_model, get_peft_model_state_dict, PeftModel, PeftConfig, PromptEncoderConfig, AdaptionPromptConfig
 from models.audio_encoder import CLAPAudioTower, CLAPEncoderConfig, HTSATAudioTower, HTSATEncoderConfig
 from models.flamingo_pytorch import PerceiverResampler
 from models.Qformer import *
@@ -114,9 +114,14 @@ class CLAP2LLAMA(nn.Module):
                 self.peft_config = LoraConfig(**config.peft_config)
             if peft_type == "IA3":
                 self.peft_config = IA3Config(**config.peft_config)
+            if peft_type == "PTUNING":
+                self.peft_config = PromptEncoderConfig(**config.peft_config)
+            if peft_type == "LLAMA-ADAPTER":
+                self.peft_config = AdaptionPromptConfig(**config.peft_config)
             self.decoder = get_peft_model(self.decoder, self.peft_config)
-            self.decoder.base_model.model.model.embed_tokens.original_module.weight.requires_grad = False
-            self.decoder.base_model.model.lm_head.original_module.weight.requires_grad = False
+            if peft_type == "LORA":
+                self.decoder.base_model.model.model.embed_tokens.original_module.weight.requires_grad = False
+                self.decoder.base_model.model.lm_head.original_module.weight.requires_grad = False
             self.decoder.print_trainable_parameters()
 
 
