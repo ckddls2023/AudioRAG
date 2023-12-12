@@ -24,7 +24,7 @@ from languagebind import LanguageBindAudio, LanguageBindAudioTokenizer, Language
 num_gpus = torch.cuda.device_count()
 num_cpus = 4*num_gpus
 total_memory = psutil.virtual_memory().total
-ray_memory = total_memory*0.8
+ray_memory = total_memory*0.7
 ray.init(num_cpus=num_cpus, num_gpus=num_gpus, object_store_memory=ray_memory, _memory=ray_memory)
 
 retrieve_json_files = [
@@ -281,7 +281,7 @@ for i, (audio, tag) in enumerate(tags[:16]):
     distance = distances[start_idx:end_idx].reshape(-1)
     indice = indices[start_idx:end_idx].reshape(-1)
     text_embed_tag = ray.get(text_embed_tags[i]) # synchronize, 5*len(tag), dim
-    audio_embed_tag = np.array([index_cpu.reconstruct(int(id)) for id in indice]) # 5*len(tag), dim
+    audio_embed_tag = np.array([audio_index_cpu.reconstruct(int(id)) for id in indice]) # 5*len(tag), dim
     # print([audio_captions[i] for i in indice])
     weights = np.einsum('ij,ij->i', text_embed_tag, audio_embed_tag)
     weighted_distance = distance / (np.abs(weights) + 1e-6) # if similar, we use di
