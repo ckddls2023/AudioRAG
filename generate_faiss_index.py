@@ -46,35 +46,40 @@ index_exists = os.path.exists(audio_index_file_path)
 caption_file_path = "./data/index/big_kb_caption_wav_path.csv"
 caption_exists = os.path.exists(caption_file_path)
 
+@ray.remote
+class PreprocessingActor:
+    def __init__(self):
+        model = LanguageBindAudio.from_pretrained('./checkpoint', cache_dir='./cache_dir')
+        tokenizer = LanguageBindAudioTokenizer.from_pretrained('./checkpoint/')
+        self.audio_process = LanguageBindAudioProcessor(model.config, tokenizer)
+
+    def prepare_batch(self, batch):
+        audios = batch['audio'].tolist()
+        captions = batch['caption'].tolist()
+        batch = self.audio_process(audios, captions, return_tensors='pt')
+        return batch
+
 
 @ray.remote(num_gpus=1)  # Assign one GPU to this actor
 class AudioEmbeddingEncoder:
     def __init__(self, model_ref):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model_ref.to(self.device)
-        tokenizer = LanguageBindAudioTokenizer.from_pretrained('./checkpoint/')
-        self.audio_process = LanguageBindAudioProcessor(self.model.config, tokenizer)
-    def _prepare_batch(self, batch):
-        # Move each tensor in the batch to the specified device
-        audios = batch['audio'].tolist()
-        captions = batch['caption'].tolist()
-        batch = self.audio_process(audios, captions, return_tensors='pt')
-        return {k: v.to(self.device) for k, v in batch.items()}
 
     def encode_audio(self, batch):
-        batch = self._prepare_batch(batch)
+        batch = {k: v.to(self.device) for k, v in batch.items()}
         with torch.no_grad():
             out = self.model(**batch)
         return out.image_embeds
     
     def encode_text(self, batch):
-        batch = self._prepare_batch(batch)
+        batch = {k: v.to(self.device) for k, v in batch.items()}
         with torch.no_grad():
             out = self.model(**batch)
         return out.text_embeds
         
     def encode_audio_text(self, batch):
-        batch = self._prepare_batch(batch)
+        batch = {k: v.to(self.device) for k, v in batch.items()}
         with torch.no_grad():
             out = self.model(**batch)
         return out
@@ -114,6 +119,9 @@ else:
             
 total_data_entries = 0
 embed_encoder_actors = [AudioEmbeddingEncoder.remote(ray.put(LanguageBindAudio.from_pretrained('./checkpoint/'))) for _ in range(num_gpus)]
+preprocessing_actors = [PreprocessingActor.remote() for _ in range(num_cpus)]
+
+max_in_flight_tasks = 100  # Adjust this number based on your system's capability
 print(f"Available resources : {num_cpus = } {num_gpus =}")
 if not index_exists:
     filtered_data = []
@@ -131,10 +139,17 @@ if not index_exists:
         filtered_data.extend(data_filtered)
     dataset = from_items(filtered_data)
     result_refs = []
+    finished_refs = []  # List to keep track of finished tasks
     for i, batch in enumerate(dataset.iter_batches(batch_size=24)):
+        if len(result_refs) >= max_in_flight_tasks:
+            done_refs, result_refs = ray.wait(result_refs, num_returns=len(result_refs) - max_in_flight_tasks + 1)
+            finished_refs.extend(done_refs)
+        preprocessing_actor = preprocessing_actors[i % num_cpus]
+        preprocessed_ref = preprocessing_actor.prepare_batch.remote(batch)
         actor = embed_encoder_actors[i % num_gpus]
-        result_refs.append(actor.encode_audio_text.remote(batch))
-    result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
+        result_refs.append(actor.encode_audio_text.remote(preprocessed_ref))
+    finished_refs.extend(ray.get(result_refs))
+    result_list = ray.get(finished_refs) # Asynchronous execution, we synchronize after all results 
 
     audio_embeds = [out.image_embeds for out in result_list]
     audio_embeds = torch.cat(audio_embeds, dim=0)
@@ -215,10 +230,17 @@ for json_file in query_json_files:
 if not query_audio_embeds_exists:
     dataset = from_items(query_data)
     result_refs = []
+    finished_refs = []  # List to keep track of finished tasks
     for i, batch in enumerate(dataset.iter_batches(batch_size=24)):
+        if len(result_refs) >= max_in_flight_tasks:
+            done_refs, result_refs = ray.wait(result_refs, num_returns=len(result_refs) - max_in_flight_tasks + 1)
+            finished_refs.extend(done_refs)
+        preprocessing_actor = preprocessing_actors[i % num_cpus]
+        preprocessed_ref = preprocessing_actor.prepare_batch.remote(batch)
         actor = embed_encoder_actors[i % num_gpus]
-        result_refs.append(actor.encode_audio.remote(batch))
-    result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
+        result_refs.append(actor.encode_audio_text.remote(preprocessed_ref))
+    finished_refs.extend(ray.get(result_refs))
+    result_list = ray.get(finished_refs) # Asynchronous execution, we synchronize after all results 
     query_audio_embeds = torch.cat(result_list, dim=0)
     query_audio_embeds = query_audio_embeds.detach().cpu().numpy() # B, dim
     np.save(query_audio_embeds_file, query_audio_embeds)
