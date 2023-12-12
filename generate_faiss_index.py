@@ -1,6 +1,3 @@
-# Preprocess Audio file and Compute Embeddings
-# Build retrieval database : Used for retrieving neighbors
-# Build index for similarity search : Train and build a search index for querying neighbors.
 import types
 from tqdm import tqdm
 import argparse
@@ -20,11 +17,10 @@ import ray
 from ray.data import from_items
 from languagebind import LanguageBindAudio, LanguageBindAudioTokenizer, LanguageBindAudioProcessor
 
-# Get the total memory of the system
 num_gpus = torch.cuda.device_count()
 num_cpus = 4*num_gpus
 total_memory = psutil.virtual_memory().total
-ray_memory = total_memory*0.7
+ray_memory = total_memory*0.8
 ray.init(num_cpus=num_cpus, num_gpus=num_gpus, object_store_memory=ray_memory, _memory=ray_memory)
 
 retrieve_json_files = [
@@ -51,22 +47,18 @@ caption_file_path = "./data/index/big_kb_caption_wav_path.csv"
 caption_exists = os.path.exists(caption_file_path)
 
 
-model = LanguageBindAudio.from_pretrained('./checkpoint/')
-tokenizer = LanguageBindAudioTokenizer.from_pretrained('./checkpoint/')
-audio_process = LanguageBindAudioProcessor(model.config, tokenizer)
-# Duplicate the model for each CUDA device and move them to respective GPUs
-def preprocess_waveform(record):
-    #input_ids : torch.Size([1, 77])
-    #pixel_values : torch.Size([1, 3, 112, 1036])
-    data = audio_process(record["audio"], record['caption'], return_tensors='pt')
-    return data
 @ray.remote(num_gpus=1)  # Assign one GPU to this actor
 class AudioEmbeddingEncoder:
     def __init__(self, model_ref):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model_ref.to(self.device)
+        tokenizer = LanguageBindAudioTokenizer.from_pretrained('./checkpoint/')
+        self.audio_process = LanguageBindAudioProcessor(self.model.config, tokenizer)
     def _prepare_batch(self, batch):
         # Move each tensor in the batch to the specified device
+        audios = batch['audio'].tolist()
+        captions = batch['caption'].tolist()
+        batch = self.audio_process(audios, captions, return_tensors='pt')
         return {k: v.to(self.device) for k, v in batch.items()}
 
     def encode_audio(self, batch):
@@ -120,15 +112,6 @@ else:
             audio_filenames.append(row[1]) # Add file path to file paths list
 
             
-def collate_fn(batch):
-    #torch.Size([1, 77])
-    #torch.Size([1, 3, 112, 1036])
-    batch['input_ids'] = torch.tensor([input_id[0] for input_id in batch['input_ids']])
-    batch['attention_mask'] = torch.tensor([mask[0] for mask in batch['attention_mask']])
-    batch['pixel_values'] = torch.tensor(batch['pixel_values']).squeeze(1)
-    return batch
-
-    
 total_data_entries = 0
 embed_encoder_actors = [AudioEmbeddingEncoder.remote(ray.put(LanguageBindAudio.from_pretrained('./checkpoint/'))) for _ in range(num_gpus)]
 print(f"Available resources : {num_cpus = } {num_gpus =}")
@@ -147,9 +130,8 @@ if not index_exists:
         data_filtered = [entry for entry in data["data"] if entry["duration"] <= 40] # Only under 40s
         filtered_data.extend(data_filtered)
     dataset = from_items(filtered_data)
-    transformed_dataset = dataset.map(preprocess_waveform)
     result_refs = []
-    for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=24, _collate_fn=collate_fn)):
+    for i, batch in enumerate(dataset.iter_batches(batch_size=24)):
         actor = embed_encoder_actors[i % num_gpus]
         result_refs.append(actor.encode_audio_text.remote(batch))
     result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
@@ -232,9 +214,8 @@ for json_file in query_json_files:
 
 if not query_audio_embeds_exists:
     dataset = from_items(query_data)
-    transformed_dataset = dataset.map(preprocess_waveform)
     result_refs = []
-    for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=24)):
+    for i, batch in enumerate(dataset.iter_batches(batch_size=24)):
         actor = embed_encoder_actors[i % num_gpus]
         result_refs.append(actor.encode_audio.remote(batch))
     result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
