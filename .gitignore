@@ -439,5 +439,9 @@ __MACOSX/
 *.faiss
 wandb/
 tmp/
+languagebind/
+LanguageBind/
 pretrained_models/
 finetuned_models/
+generate_audioset_tag/
+checkpoint/
