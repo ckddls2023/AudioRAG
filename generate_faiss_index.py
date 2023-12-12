@@ -270,23 +270,27 @@ distances = np.concatenate(distances) # B, 5
 indices = np.concatenate(indices)
 start_idx = 0
 text_embed_tags = []
-for i, (audio, tag) in enumerate(tags):
+for i, (audio, tag) in enumerate(tags[:16]):
     actor = embed_encoder_actors[i % num_gpus]
     texts = ["This is sound of " + caption for caption in tag for _ in range(5)] # top_5
     text_embed_tags.append(actor.encode_text.remote(texts))
 
-for i, (audio, tag) in enumerate(tags):
+for i, (audio, tag) in enumerate(tags[:16]):
+    # print(audio)
+    # print(tag)
     end_idx = start_idx + len(tag)
     distance = distances[start_idx:end_idx].reshape(-1)
     indice = indices[start_idx:end_idx].reshape(-1)
     text_embed_tag = ray.get(text_embed_tags[i]) # synchronize, 5*len(tag), dim
     audio_embed_tag = np.array([index_cpu.reconstruct(int(id)) for id in indice]) # 5*len(tag), dim
+    # print([audio_captions[i] for i in indice])
     weights = np.einsum('ij,ij->i', text_embed_tag, audio_embed_tag)
-    weighted_distance = distance / (weights + 1e-6) # if similar, we use di
-    sorted_indices = np.argsort(distance)
+    weighted_distance = distance / (np.abs(weights) + 1e-6) # if similar, we use di
+    sorted_indices = np.argsort(np.abs(distance))
     sorted_indice = indice[sorted_indices]
     selected_indice = sorted_indice[:5]
     retrieved_results[audio] = [(audio_filenames[i],audio_captions[i]) for i in selected_indice]
+    # print(retrieved_results[audio])
     start_idx = end_idx
 
 # Save the results
