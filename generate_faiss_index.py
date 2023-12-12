@@ -4,6 +4,8 @@
 import types
 from tqdm import tqdm
 import argparse
+import csv
+import sys
 from omegaconf import OmegaConf
 import faiss
 import torch
@@ -23,7 +25,7 @@ from laion_clap.training.data import get_audio_features, int16_to_float32, float
 num_gpus = torch.cuda.device_count()
 num_cpus = 4*num_gpus
 total_memory = psutil.virtual_memory().total
-ray_memory = total_memory*0.4
+ray_memory = total_memory*0.8
 ray.init(num_cpus=num_cpus, num_gpus=num_gpus, object_store_memory=ray_memory, _memory=ray_memory)
 
 retrieve_json_files = [
@@ -45,6 +47,8 @@ query_json_files = [
 #index_file_path = "./data/index/index_pretrain.faiss"
 index_file_path = "./data/index/index_whole.faiss"
 index_exists = os.path.exists(index_file_path)
+caption_file_path = "./data/index/big_kb_caption_wav_path.csv"
+caption_exists = os.path.exists(caption_file_path)
 
 def preprocess_waveform(record):
     audio_cfg = {
@@ -82,24 +86,40 @@ class AudioEmbeddingEncoder:
         self.clap.eval()
         self.clap.to(self.device)
 
-    def encode(self, batch):
+    def encode_audio(self, batch):
         outputs = self.clap.model.get_audio_embedding(batch)
         return outputs
     
-audio_filenames = []
-audio_captions = []
-for json_file in retrieve_json_files:
+    def encode_text(self, batch):
+        outputs = self.clap.get_text_embedding(batch)
+        return outputs
     
-    with open(json_file, 'r') as file:
-        data = json.load(file)
-    
-    if data["num_captions_per_audio"] > 1:
-        for entry in data["data"]:
-            entry["caption"] = entry["caption"][0] # Only take first caption as retrieve text
-    
-    data_filtered = [entry for entry in data["data"] if entry["duration"] <= 40] # Only under 40s
-    audio_captions = audio_captions + [entry["caption"] for entry in data_filtered]
-    audio_filenames = audio_filenames + [entry["audio"] for entry in data_filtered]
+if not caption_exists:
+    audio_filenames = []
+    audio_captions = []
+    for json_file in retrieve_json_files:
+        
+        with open(json_file, 'r') as file:
+            data = json.load(file)
+        
+        if data["num_captions_per_audio"] > 1:
+            for entry in data["data"]:
+                entry["caption"] = entry["caption"][0] # Only take first caption as retrieve text
+        
+        data_filtered = [entry for entry in data["data"] if entry["duration"] <= 40] # Only under 40s
+        audio_captions = audio_captions + [entry["caption"] for entry in data_filtered]
+        audio_filenames = audio_filenames + [entry["audio"] for entry in data_filtered]
+else:
+    audio_filenames = []
+    audio_captions = []
+    print("reload caption index from disk")
+    with open(caption_file_path, 'r') as file:
+        csv_reader = csv.reader(file)
+        next(csv_reader)  # Skip the header
+        for row in csv_reader:
+            audio_captions.append(row[0])   # Add caption to captions list
+            audio_filenames.append(row[1]) # Add file path to file paths list
+
     
 def collate_fn(batch):
     keys = batch.keys()
@@ -143,7 +163,7 @@ if not index_exists:
     result_refs = []
     for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=16, _collate_fn=collate_fn)):
         actor = embed_encoder_actors[i % num_gpus]
-        result_refs.append(actor.encode.remote(batch))
+        result_refs.append(actor.encode_audio.remote(batch))
     result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
     audio_embeds = torch.cat(result_list, dim=0)
     audio_embeds = audio_embeds.detach().cpu().numpy()
@@ -157,7 +177,7 @@ if not index_exists:
     index_cpu.add(audio_embeds)
     faiss.write_index(index_cpu, index_file_path)
 else:
-    print("reaload faiss index from disk")
+    print("reload faiss index from disk")
     index_cpu = faiss.read_index(index_file_path)
 
 # Sanity check
@@ -168,7 +188,6 @@ for json_file in retrieve_json_files:
             data_filtered = [entry for entry in data["data"] if entry["duration"] <= 40] # Only under 40s
             total_data_entries += len(data_filtered)
 print(f"length of data samples {total_data_entries} and faiss index embedding {index_cpu.ntotal}, caption {len(audio_captions)}")
-    
 
 @ray.remote
 class FaissSearcher:
@@ -189,12 +208,15 @@ def split_into_batches(embeddings, batch_size):
 
 retrieved_results = {}
 
+query_audio_embeds_file = "./data/index/query_audio_embeds.npy"
+query_audio_embeds_exists = os.path.exists(query_audio_embeds_file)
+
 query_data = []
 tags = []
 for json_file in query_json_files:
     with open(json_file, 'r') as file:
         data = json.load(file)
-    for entry in data["data"][:32]:
+    for entry in data["data"]:
         # Remove specified keys
         keys_to_remove = ['author', 'description', 'download_link', 'file_name', 'href', 'category', 'title', 'caption']
         for key in keys_to_remove:
@@ -207,16 +229,21 @@ for json_file in query_json_files:
             new_entry["audio"] = entry["audio"].replace('.wav', f"_{i}.wav")
             query_data.append(new_entry)
         #query_data.append(entry)
-    
-dataset = from_items(query_data)
-transformed_dataset = dataset.map(preprocess_waveform)
-result_refs = []
-for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=16, _collate_fn=collate_fn)):
-    actor = embed_encoder_actors[i % num_gpus]
-    result_refs.append(actor.encode.remote(batch))
-result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
-query_audio_embeds = torch.cat(result_list, dim=0)
-query_audio_embeds = query_audio_embeds.detach().cpu().numpy() # B, dim
+
+if not query_audio_embeds_exists:
+    dataset = from_items(query_data)
+    transformed_dataset = dataset.map(preprocess_waveform)
+    result_refs = []
+    for i, batch in enumerate(transformed_dataset.iter_batches(batch_size=16, _collate_fn=collate_fn)):
+        actor = embed_encoder_actors[i % num_gpus]
+        result_refs.append(actor.encode_audio.remote(batch))
+    result_list = ray.get(result_refs) # Asynchronous execution, we synchronize after all results 
+    query_audio_embeds = torch.cat(result_list, dim=0)
+    query_audio_embeds = query_audio_embeds.detach().cpu().numpy() # B, dim
+    np.save(query_audio_embeds_file, query_audio_embeds)
+else:
+    print("Reload query audio embeds from numpy file")
+    query_audio_embeds = np.load(query_audio_embeds_file)
 
 batch_size = 64
 query_batches = split_into_batches(query_audio_embeds, 64) # B => N, 64
@@ -237,30 +264,25 @@ print(f"length of total samples {len(query_data)}, length of indices {total_leng
 #            retrieved_results[query_data[i*batch_size+j]['audio']] = [(audio_filenames[i],audio_captions[i]) for i in indice]
 
 # To find tags 
-# TODO : Remove it-self
-# TODO : Before retrieve, please verify tag seperated audio first
 distances = [elem[0] for elem in search_results]
 indices = [elem[1] for elem in search_results]
-distances = np.concatenate(distances)
+distances = np.concatenate(distances) # B, 5
 indices = np.concatenate(indices)
 start_idx = 0
-weights = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 
-                    1.0, 2.0, 3.0, 4.0, 5.0,
-                    1.0, 2.0, 3.0, 4.0, 5.0,
-                    1.0, 2.0, 3.0, 4.0, 5.0,
-                    1.0, 2.0, 3.0, 4.0, 5.0,
-                    1.0, 2.0, 3.0, 4.0, 5.0,
-                    1.0, 2.0, 3.0, 4.0, 5.0,
-                    1.0, 2.0, 3.0, 4.0, 5.0,
-                    1.0, 2.0, 3.0, 4.0, 5.0,
-                    1.0, 2.0, 3.0, 4.0, 5.0,
-                    1.0, 2.0, 3.0, 4.0, 5.0,
-                    1.0, 2.0, 3.0, 4.0, 5.0])  # Example weights
-for audio, tag in tags:
+text_embed_tags = []
+for i, (audio, tag) in enumerate(tags):
+    actor = embed_encoder_actors[i % num_gpus]
+    texts = ["This is sound of " + caption for caption in tag for _ in range(5)] # top_5
+    text_embed_tags.append(actor.encode_text.remote(texts))
+
+for i, (audio, tag) in enumerate(tags):
     end_idx = start_idx + len(tag)
     distance = distances[start_idx:end_idx].reshape(-1)
-    weighted_distance = distance * weights[:len(distance)] # 5, 10, 15
     indice = indices[start_idx:end_idx].reshape(-1)
+    text_embed_tag = ray.get(text_embed_tags[i]) # synchronize, 5*len(tag), dim
+    audio_embed_tag = np.array([index_cpu.reconstruct(int(id)) for id in indice]) # 5*len(tag), dim
+    weights = np.einsum('ij,ij->i', text_embed_tag, audio_embed_tag)
+    weighted_distance = distance / (weights + 1e-6) # if similar, we use di
     sorted_indices = np.argsort(distance)
     sorted_indice = indice[sorted_indices]
     selected_indice = sorted_indice[:5]
