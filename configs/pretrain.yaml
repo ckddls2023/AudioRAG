@@ -1,12 +1,18 @@
 exp_name: 'pretrain'
 seed: 20
+
 train_jsons: [
-  'data/json_files/BBC_Sound_Effects/bbc_final.json',
-  'data/json_files/FreeSound/fsd_final.json',
-  'data/json_files/SoundBible/sb_final.json',
   "data/json_files/AudioSet_SL/as_final.json",
-  #"data/json_files/Clotho/clotho_final.json"
+  'data/json_files/AudioSet/train.json',
+  'data/json_files/Clotho/train.json',
 ]
+#train_jsons: [
+#  'data/json_files/BBC_Sound_Effects/bbc_final.json',
+#  'data/json_files/FreeSound/fsd_final.json',
+#  'data/json_files/SoundBible/sb_final.json',
+#  "data/json_files/AudioSet_SL/as_final.json",
+#  #"data/json_files/Clotho/clotho_final.json"
+#]
 val_jsons: [
   "data/json_files/AudioSet/val.json",
 ]
@@ -64,10 +70,10 @@ training:
   epochs: 5
   clip_grad: 2
   output_path: "./pretrained_models/audio_caption_LGTM/"
-  eval: True
+  eval: False
   validate: False
 
 index_args:
-  #index_path: "./data/index/final_index_big_kb/audio2audio_train.json"
-  index_path: "./data/index/final_index_big_kb/audio2audio_val.json"
+  index_path: "./data/index/final_index_big_kb/audio2audio_train.json"
+  #index_path: "./data/index/final_index_big_kb/audio2audio_val.json"
   top_k: 2

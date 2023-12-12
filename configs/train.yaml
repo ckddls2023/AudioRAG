@@ -36,10 +36,8 @@ model_args:
   #unfreeze_am: ['model.audio_branch.layers.3.blocks.1']
   unfreeze_am: []
   freeze_lm: False
-  #checkpoint_path: "finetuned_models/finetuned_MLP_wd_0.01_r64_a32/"
-  #checkpoint_path: "finetuned_models/finetuned_MLP_wd_0.001_r16_a16/"
-  #checkpoint_path: "finetuned_models/finetuned_MLP_wd_0.001_r16_a32_unfreeze_last/"
-  #checkpoint_path: "./finetuned_models/finetuned_MLP/"
+  #checkpoint_path: "./finetuned_models/audio2audio_MLP/"
+  #checkpoint_path: "./finetuned_models/frame2audio_MLP/"
   checkpoint_path: "./pretrained_models/pretrained_MLP/"
   encoder:
     model_name: "CLAPAudioEncoder"
@@ -62,18 +60,18 @@ model_args:
   #   task_type: "CAUSAL_LM"
   #   modules_to_save: ['lm_head', 'embed_tokens']
   #   target_modules: ["q_proj", "v_proj", "k_proj","o_proj"]
-  # peft_config:
-  #   type: "IA3"
-  #   peft_type: "IA3"
-  #   task_type: "CAUSAL_LM"
-  #   target_modules: ["q_proj", "v_proj", "down_proj"]
-  #   feedforward_modules: ["down_proj"]
   peft_config:
-      type: "PTUNING"
-      task_type: "CAUSAL_LM"
-      num_virtual_tokens: 20
-      encoder_dropout: 0.1
-      encoder_hidden_size: 4096
+    type: "IA3"
+    peft_type: "IA3"
+    task_type: "CAUSAL_LM"
+    target_modules: ["q_proj", "v_proj", "down_proj"]
+    feedforward_modules: ["down_proj"]
+  #peft_config:
+  #    type: "PTUNING"
+  #    task_type: "CAUSAL_LM"
+  #    num_virtual_tokens: 20
+  #    encoder_dropout: 0.1
+  #    encoder_hidden_size: 4096
   # peft_config:
   #     type: "LLAMA-ADAPTER"
   #     task_type: "CAUSAL_LM"
@@ -99,6 +97,11 @@ training:
   validate: False
   
 index_args:
-  index_path: ""
-  # index_path: "./data/index/final_index_big_kb/frame2frame_train.json"
+  #index_path: ""
+  index_path: "./data/index/final_index_big_kb/frame2frame_train.json"
+  #index_path: "./data/index/final_index_big_kb/frame2frame_val.json"
+  #index_path: "./data/index/final_index_big_kb/audio2text_train.json"
+  #index_path: "./data/index/final_index_big_kb/audio2text_val.json"
+  #index_path: "./data/index/final_index_big_kb/audio2audio_train.json"
+  #index_path: "./data/index/final_index_big_kb/audio2audio_val.json"
   top_k: 2

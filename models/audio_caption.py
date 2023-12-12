@@ -205,6 +205,7 @@ class CLAP2LLAMA(nn.Module):
         encoder_caption = caption
         if retr_captions:
             encoder_caption = [' '.join(caption) for caption in zip(*retr_captions)] # B,K to B
+            #encoder_caption = retr_captions[0] # B,top_1
         audio_embed, loss = self.forward_encoder(audio, encoder_caption)  # Only for LGTM
         retr_audio_embeds = []
         if retr_audios:

@@ -113,11 +113,11 @@ for json_file in json_files:
 
     # Iterate over each entry and separate audio based on the tag
     separation_refs = []
-    for entry in data["data"]:
+    for i, entry in enumerate(data["data"]):
         audio_file = entry['audio']
         tags = entry['tag']
-        for i, tag in enumerate(tags):
-            output_file = audio_file.replace(".wav", f"_{i}.wav")
+        for j, tag in enumerate(tags):
+            output_file = audio_file.replace(".wav", f"_{j}.wav")
             actor = separator_actors[i % num_gpus]
             separation_refs.append(actor.separate.remote(audio_file, tag, output_file))
 

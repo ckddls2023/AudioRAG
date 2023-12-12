@@ -20,7 +20,7 @@ import evaluate
 from metrics import SpiceMetric, CocoTokenizer, CiderMetric
 
 warnings.simplefilter("ignore", UserWarning)
-ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True, static_graph=False)
+ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=False, static_graph=False)
 accelerator = Accelerator(gradient_accumulation_steps=8, log_with="wandb", kwargs_handlers=[ddp_kwargs], even_batches=True)
 
 
@@ -39,7 +39,7 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0):
     start_time = time.time()
     for batch_id, (audio, caption, audio_filenames, retr_audios, retr_captions) in enumerate(pbar := tqdm(dataloader, total=len(dataloader))):
         iter_time = time.time() - start_time
-        retr_audios = [] # Force to only put captions for LGTM
+        #retr_audios = [] # Force to only put captions for LGTM
         #retr_captions = [[texts[0] for texts in caption]]
         with accelerator.accumulate(model):
             optimizer.zero_grad()
