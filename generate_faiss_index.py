@@ -15,10 +15,10 @@ import psutil
 import numpy as np
 import ray
 from ray.data import from_items
-from languagebind import LanguageBindAudio, LanguageBindAudioTokenizer, LanguageBindAudioProcessor
+from languagebind import LanguageBindAudio, LanguageBindAudioTokenizer, LanguageBindAudioProcessor, LanguageBindAudioConfig
 
 num_gpus = torch.cuda.device_count()
-num_cpus = 4*num_gpus
+num_cpus = 8*num_gpus
 total_memory = psutil.virtual_memory().total
 ray_memory = total_memory*0.8
 ray.init(num_cpus=num_cpus, num_gpus=num_gpus, object_store_memory=ray_memory, _memory=ray_memory)
@@ -33,11 +33,20 @@ retrieve_json_files = [
 ]
 
 query_json_files = [
+  './data/json_files/BBC_Sound_Effects/bbc_final.json',
+  './data/json_files/FreeSound/fsd_final.json',
+  './data/json_files/SoundBible/sb_final.json',
+  './data/json_files/AudioSet_SL/as_final.json',
   './data/json_files/AudioSet/train.json',
-  './data/json_files/AudioSet/val.json',
   './data/json_files/Clotho/train.json',
-  './data/json_files/Clotho/val.json',
 ]
+
+# query_json_files = [
+#   './data/json_files/AudioSet/train.json',
+#   './data/json_files/AudioSet/val.json',
+#   './data/json_files/Clotho/train.json',
+#   './data/json_files/Clotho/val.json',
+# ]
 
 #index_file_path = "./data/index/index_pretrain.faiss"
 audio_index_file_path = "./data/index/audio_index.faiss"
@@ -49,9 +58,9 @@ caption_exists = os.path.exists(caption_file_path)
 @ray.remote
 class PreprocessingActor:
     def __init__(self):
-        model = LanguageBindAudio.from_pretrained('./checkpoint', cache_dir='./cache_dir')
+        config = LanguageBindAudioConfig.from_pretrained('./checkpoint')
         tokenizer = LanguageBindAudioTokenizer.from_pretrained('./checkpoint/')
-        self.audio_process = LanguageBindAudioProcessor(model.config, tokenizer)
+        self.audio_process = LanguageBindAudioProcessor(config, tokenizer)
 
     def prepare_batch(self, batch):
         audios = batch['audio'].tolist()
@@ -70,19 +79,19 @@ class AudioEmbeddingEncoder:
         batch = {k: v.to(self.device) for k, v in batch.items()}
         with torch.no_grad():
             out = self.model(**batch)
-        return out.image_embeds
+        return out.image_embeds.detach().cpu()
     
     def encode_text(self, batch):
         batch = {k: v.to(self.device) for k, v in batch.items()}
         with torch.no_grad():
             out = self.model(**batch)
-        return out.text_embeds
+        return out.text_embeds.detach().cpu()
         
     def encode_audio_text(self, batch):
         batch = {k: v.to(self.device) for k, v in batch.items()}
         with torch.no_grad():
             out = self.model(**batch)
-        return out
+        return {'image_embeds': out.image_embeds.detach().cpu(), 'text_embeds': out.text_embeds.detach().cpu()}
     
 if not caption_exists:
     audio_filenames = []
@@ -139,25 +148,29 @@ if not index_exists:
         filtered_data.extend(data_filtered)
     dataset = from_items(filtered_data)
     result_refs = []
-    finished_refs = []  # List to keep track of finished tasks
+    results = []
+    total_batch = len(filtered_data) // 24
     for i, batch in enumerate(dataset.iter_batches(batch_size=24)):
+        if i % 100 == 0:  # Print progress every 10 iterations
+            print(f"Processing batch {i+1}/{total_batch}...")
         if len(result_refs) >= max_in_flight_tasks:
             done_refs, result_refs = ray.wait(result_refs, num_returns=len(result_refs) - max_in_flight_tasks + 1)
-            finished_refs.extend(done_refs)
+            results.extend(ray.get(done_refs))
+            for ref in done_refs:
+                del ref
         preprocessing_actor = preprocessing_actors[i % num_cpus]
         preprocessed_ref = preprocessing_actor.prepare_batch.remote(batch)
         actor = embed_encoder_actors[i % num_gpus]
         result_refs.append(actor.encode_audio_text.remote(preprocessed_ref))
-    finished_refs.extend(ray.get(result_refs))
-    result_list = ray.get(finished_refs) # Asynchronous execution, we synchronize after all results 
+    results.extend(ray.get(result_refs)) # Asynchronous execution, we synchronize after all results 
 
-    audio_embeds = [out.image_embeds for out in result_list]
+    audio_embeds = [out['image_embeds'] for out in results]
     audio_embeds = torch.cat(audio_embeds, dim=0)
-    audio_embeds = audio_embeds.detach().cpu().numpy()
+    audio_embeds = audio_embeds.detach().cpu().contiguous().numpy()
     audio_dim = audio_embeds.shape[1] # B, H
-    text_embeds = [out.text_embeds for out in result_list]
+    text_embeds = [out['text_embeds'] for out in results]
     text_embeds = torch.cat(text_embeds, dim=0)
-    text_embeds = text_embeds.detach().cpu().numpy()
+    text_embeds = text_embeds.detach().cpu().contiguous().numpy()
     text_dim = text_embeds.shape[1] # B, H
     #nlist = 512 # 32~512, trade-off between search time, nprobe=32~128
     #quantizer = faiss.IndexFlatL2(dim)
@@ -209,46 +222,54 @@ query_audio_embeds_file = "./data/index/query_audio_embeds.npy"
 query_audio_embeds_exists = os.path.exists(query_audio_embeds_file)
 
 query_data = []
-tags = []
+# tags = []
 for json_file in query_json_files:
     with open(json_file, 'r') as file:
         data = json.load(file)
     for entry in data["data"]:
         # Remove specified keys
-        keys_to_remove = ['author', 'description', 'download_link', 'category', 'file_name', 'href', 'category', 'title', 'caption']
+        keys_to_remove = ['author', 'description', 'download_link', 'category', 'file_name', 'href', 'category', 'title']
         for key in keys_to_remove:
             if key in entry:
                 del entry[key]
+        if data["num_captions_per_audio"] > 1:
+            entry["caption"] = entry["caption"][0] # Only take first caption as retrieve text and encode
+            
         # To find TAG
-        tags.append((entry['audio'],entry['tag']))
-        for i, tag in enumerate(entry['tag']):
-            new_entry = entry.copy()
-            new_entry["audio"] = entry["audio"].replace('.wav', f"_{i}.wav")
-            query_data.append(new_entry)
-        #query_data.append(entry)
+        # tags.append((entry['audio'],entry['tag']))
+        # for i, tag in enumerate(entry['tag']):
+        #     new_entry = entry.copy()
+        #     new_entry["audio"] = entry["audio"].replace('.wav', f"_{i}.wav")
+        #     query_data.append(new_entry)
+    query_data.extend([entry for entry in data["data"] if entry["duration"] <= 40])
 
 if not query_audio_embeds_exists:
     dataset = from_items(query_data)
+    results = []
     result_refs = []
-    finished_refs = []  # List to keep track of finished tasks
+    total_batch = len(query_data) // 24
     for i, batch in enumerate(dataset.iter_batches(batch_size=24)):
+        if i % 100 == 0:  # Print progress every 10 iterations
+            print(f"Processing batch {i+1}/{total_batch}...")
         if len(result_refs) >= max_in_flight_tasks:
             done_refs, result_refs = ray.wait(result_refs, num_returns=len(result_refs) - max_in_flight_tasks + 1)
-            finished_refs.extend(done_refs)
+            results.extend(ray.get(done_refs))
+            for ref in done_refs:
+                del ref
         preprocessing_actor = preprocessing_actors[i % num_cpus]
         preprocessed_ref = preprocessing_actor.prepare_batch.remote(batch)
         actor = embed_encoder_actors[i % num_gpus]
-        result_refs.append(actor.encode_audio_text.remote(preprocessed_ref))
-    finished_refs.extend(ray.get(result_refs))
-    result_list = ray.get(finished_refs) # Asynchronous execution, we synchronize after all results 
-    query_audio_embeds = torch.cat(result_list, dim=0)
-    query_audio_embeds = query_audio_embeds.detach().cpu().numpy() # B, dim
+        result_refs.append(actor.encode_audio.remote(preprocessed_ref))
+    results.extend(ray.get(result_refs)) # Asynchronous execution, we synchronize after all results 
+    query_audio_embeds = torch.cat(results, dim=0)
+    query_audio_embeds = query_audio_embeds.detach().cpu().contiguous().numpy() # B, dim
     np.save(query_audio_embeds_file, query_audio_embeds)
 else:
     print("Reload query audio embeds from numpy file")
     query_audio_embeds = np.load(query_audio_embeds_file)
 
-query_batches = split_into_batches(query_audio_embeds, 64) # B => N, 64
+batch_size = 1 # Due to unstable search results
+query_batches = split_into_batches(query_audio_embeds, batch_size) # B => N, 64
 search_tasks = []
 for i, query_batch in enumerate(query_batches):
     actor = search_actors[i % len(search_actors)]
@@ -258,42 +279,39 @@ search_results = ray.get(search_tasks) # Asynchronous execution, we synchronize 
 total_length = sum(len(indices) for (distances, indices) in search_results)
 print(f"length of total samples {len(query_data)}, length of indices {total_length}")
 
-#for i, (distances, indices) in enumerate(search_results):
-#    for j, indice in enumerate(indices):
-#        if query_data[i*batch_size+j]['audio'] == audio_filenames[indice[0]]: # Remove first element which it is itself
-#            retrieved_results[query_data[i*batch_size+j]['audio']] = [(audio_filenames[i],audio_captions[i]) for i in indice[1:]]
-#        else:
-#            retrieved_results[query_data[i*batch_size+j]['audio']] = [(audio_filenames[i],audio_captions[i]) for i in indice]
+for i, (distances, indices) in enumerate(search_results):
+   for j, indice in enumerate(indices):
+       print(distances[j])
+       if query_data[i*batch_size+j]['audio'] == audio_filenames[indice[0]]: # Remove first element which it is itself
+           retrieved_results[query_data[i*batch_size+j]['audio']] = [(audio_filenames[idx],audio_captions[idx]) for idx in indice[1:]]
+       else:
+           retrieved_results[query_data[i*batch_size+j]['audio']] = [(audio_filenames[idx],audio_captions[idx]) for idx in indice]
 
 # To find tags 
-distances = [elem[0] for elem in search_results]
-indices = [elem[1] for elem in search_results]
-distances = np.concatenate(distances) # B, 5
-indices = np.concatenate(indices)
-start_idx = 0
-text_embed_tags = []
-for i, (audio, tag) in enumerate(tags[:16]):
-    actor = embed_encoder_actors[i % num_gpus]
-    texts = ["This is sound of " + caption for caption in tag for _ in range(5)] # top_5
-    text_embed_tags.append(actor.encode_text.remote(texts))
+# distances = [elem[0] for elem in search_results]
+# indices = [elem[1] for elem in search_results]
+# distances = np.concatenate(distances) # B, 5
+# indices = np.concatenate(indices)
+# start_idx = 0
+# text_embed_tags = []
+# for i, (audio, tag) in enumerate(tags[:16]):
+#     actor = embed_encoder_actors[i % num_gpus]
+#     texts = ["a sound of " + caption for caption in tag for _ in range(5)] # top_5
+#     text_embed_tags.append(actor.encode_text.remote(texts))
 
-for i, (audio, tag) in enumerate(tags[:16]):
-    # print(audio)
-    # print(tag)
-    end_idx = start_idx + len(tag)
-    distance = distances[start_idx:end_idx].reshape(-1)
-    indice = indices[start_idx:end_idx].reshape(-1)
-    text_embed_tag = ray.get(text_embed_tags[i]) # synchronize, 5*len(tag), dim
-    audio_embed_tag = np.array([audio_index_cpu.reconstruct(int(id)) for id in indice]) # 5*len(tag), dim
-    # print([audio_captions[i] for i in indice])
-    weights = np.einsum('ij,ij->i', text_embed_tag, audio_embed_tag)
-    weighted_distance = distance / (np.abs(weights) + 1e-6) # if similar, we use di
-    sorted_indices = np.argsort(np.abs(distance))
-    sorted_indice = indice[sorted_indices]
-    selected_indice = sorted_indice[:5]
-    retrieved_results[audio] = [(audio_filenames[i],audio_captions[i]) for i in selected_indice]
-    # print(retrieved_results[audio])
-    start_idx = end_idx
+# for i, (audio, tag) in enumerate(tags[:16]):
+#     end_idx = start_idx + len(tag)
+#     distance = distances[start_idx:end_idx].reshape(-1)
+#     indice = indices[start_idx:end_idx].reshape(-1)
+#     text_embed_tag = ray.get(text_embed_tags[i]) # synchronize, 5*len(tag), dim
+#     audio_embed_tag = np.array([audio_index_cpu.reconstruct(int(id)) for id in indice]) # 5*len(tag), dim
+#     weights = np.einsum('ij,ij->i', text_embed_tag, audio_embed_tag)
+#     weighted_distance = distance / (np.abs(weights) + 1e-6) # if similar, we use di
+#     sorted_indices = np.argsort(np.abs(distance))
+#     sorted_indice = indice[sorted_indices]
+#     selected_indice = sorted_indice[:5]
+#     retrieved_results[audio] = [(audio_filenames[i],audio_captions[i]) for i in selected_indice]
+#     start_idx = end_idx
 
 # Save the results
 with open('retrieved_results.json', 'w') as f:

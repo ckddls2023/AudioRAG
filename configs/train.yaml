@@ -38,6 +38,7 @@ model_args:
   freeze_lm: False
   #checkpoint_path: "./finetuned_models/audio2audio_MLP/"
   #checkpoint_path: "./finetuned_models/frame2audio_MLP/"
+  #checkpoint_path: "./finetuned_models/audio2text_MLP/"
   checkpoint_path: "./pretrained_models/pretrained_MLP/"
   encoder:
     model_name: "CLAPAudioEncoder"

@@ -189,7 +189,7 @@ class CLAP2LLAMA(nn.Module):
                 retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_caption, audio_embed.device, add_special_tokens=False)
                 retr_input_embeds = torch.cat((retr_audio_embed, self.get_decoder_embeddings()(retr_input_ids[:,:-1])), dim=1) # Remove EOS token
                 shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(retr_input_ids[:,:-1], retr_attn_mask[:,:-1], retr_audio_embed.shape[1]) 
-                # shifted_retr_ids[:,:] = -100 # Ignore all Wavcaps style
+                shifted_retr_ids[:,:] = -100 # Ignore all Wavcaps style
                 input_embeds = torch.cat((retr_input_embeds, input_embeds), dim=1)
                 shifted_input_ids = torch.cat((shifted_retr_ids, shifted_input_ids), dim=1)
                 shifted_attn_mask = torch.cat((shifted_retr_mask, shifted_attn_mask), dim=1)

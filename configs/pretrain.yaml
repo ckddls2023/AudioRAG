@@ -2,17 +2,12 @@ exp_name: 'pretrain'
 seed: 20
 
 train_jsons: [
-  "data/json_files/AudioSet_SL/as_final.json",
-  'data/json_files/AudioSet/train.json',
-  'data/json_files/Clotho/train.json',
+ 'data/json_files/BBC_Sound_Effects/bbc_final.json',
+ 'data/json_files/FreeSound/fsd_final.json',
+ 'data/json_files/SoundBible/sb_final.json',
+ "data/json_files/AudioSet_SL/as_final.json",
+ #"data/json_files/Clotho/clotho_final.json"
 ]
-#train_jsons: [
-#  'data/json_files/BBC_Sound_Effects/bbc_final.json',
-#  'data/json_files/FreeSound/fsd_final.json',
-#  'data/json_files/SoundBible/sb_final.json',
-#  "data/json_files/AudioSet_SL/as_final.json",
-#  #"data/json_files/Clotho/clotho_final.json"
-#]
 val_jsons: [
   "data/json_files/AudioSet/val.json",
 ]
@@ -42,7 +37,7 @@ model_args:
   freeze_am: True
   unfreeze_am: []
   freeze_lm: True
-  checkpoint_path: "./pretrained_models/audio_caption_LGTM/"
+  checkpoint_path: ""
   encoder:
     model_name: "CLAPAudioEncoder"
     pretrained: True
@@ -74,6 +69,7 @@ training:
   validate: False
 
 index_args:
-  index_path: "./data/index/final_index_big_kb/audio2audio_train.json"
+  #index_path: "./data/index/final_index_big_kb/audio2audio_train.json"
+  index_path: "./data/index/final_index_big_kb_pretrainQuery/audio2audio_pretrain.json"
   #index_path: "./data/index/final_index_big_kb/audio2audio_val.json"
   top_k: 2

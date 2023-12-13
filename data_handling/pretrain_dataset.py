@@ -123,7 +123,7 @@ def pretrain_dataloader(config,
                         top_k=2,
                         shuffle=False):
     blacklist = None if 'val' in subset else config.blacklist
-    batch_size = 8 if 'val' in subset else config.data_args.batch_size
+    batch_size = 2 if 'val' in subset else config.data_args.batch_size
     dataset = AudioLanguagePretrainDataset(config[subset], config["audio_args"], blacklist, 'train' in subset, retrieve_map, top_k)
     if bucket:
         sampler = BySequenceLengthSampler(lengths=dataset.lengths,
