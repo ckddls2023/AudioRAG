@@ -37,8 +37,8 @@ model_args:
   unfreeze_am: []
   freeze_lm: False
   #checkpoint_path: "./finetuned_models/audio2audio_MLP/"
-  checkpoint_path: "./finetuned_models/frame2audio_MLP/"
-  #checkpoint_path: "./finetuned_models/audio2text_MLP/"
+  #checkpoint_path: "./finetuned_models/frame2audio_MLP/"
+  checkpoint_path: "./finetuned_models/audio2text_MLP/"
   #checkpoint_path: "./finetuned_models/finetuned_MLP/"
   #checkpoint_path: "./pretrained_models/pretrained_MLP/"
   encoder:
@@ -101,9 +101,9 @@ training:
 index_args:
   #index_path: ""
   #index_path: "./data/index/final_index_big_kb/frame2frame_train.json"
-  index_path: "./data/index/final_index_big_kb/frame2frame_val.json"
+  #index_path: "./data/index/final_index_big_kb/frame2frame_val.json"
   #index_path: "./data/index/final_index_big_kb/audio2text_train.json"
-  #index_path: "./data/index/final_index_big_kb/audio2text_val.json"
+  index_path: "./data/index/final_index_big_kb/audio2text_val.json"
   #index_path: "./data/index/final_index_big_kb/audio2audio_train.json"
   #index_path: "./data/index/final_index_big_kb/audio2audio_val.json"
   top_k: 2

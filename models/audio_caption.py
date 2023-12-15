@@ -277,10 +277,9 @@ class CLAP2LLAMA(nn.Module):
                     retr_attn_mask = shifted_attn_mask.new_ones(retr_audio_embeds[i].size()[:2]) # B, prefix
                     shifted_attn_mask = torch.cat((retr_attn_mask, shifted_attn_mask), dim=1)
             if prompt:
-                prompt = [prompt] * len(audio)
-                prompt_ids, prompt_mask = self.prepare_text_input(prompt, input_embeds.device, add_special_tokens=False)
-                bos_prompt_ids = torch.cat([prompt_ids.new_full((prompt_ids.size(0), 1), self.tokenizer.bos_token_id), prompt_ids], dim=1)
-                input_embeds = torch.cat((bos_prompt_ids, input_embeds), dim=1) 
+                prompts = [prompt] * input_embeds.shape[0]
+                prompt_ids, prompt_mask = self.prepare_text_input(prompts, input_embeds.device, add_special_tokens=False)
+                input_embeds = torch.cat((self.get_decoder_embeddings()(prompt_ids), input_embeds), dim=1) 
                 shifted_attn_mask = torch.cat((prompt_mask, shifted_attn_mask), dim=1)
             outputs = self.decoder.generate(
                 inputs_embeds=input_embeds,

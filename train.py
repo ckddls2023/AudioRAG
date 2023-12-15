@@ -71,13 +71,14 @@ def validate(data_loader, model, epoch):
     unwrapped_model = accelerator.unwrap_model(model)
     gen_captions = []
     ref_captions = []
+    prompt = ""
     for i, batch_data in tqdm(enumerate(data_loader), total=len(data_loader)):
         audio, caption, audio_names, retr_audios, retr_captions = batch_data
         if not retr_captions: # If retrieved results is missing, num_captions = 5, choose 1
             retr_captions = [[texts[0] for texts in caption]]
         #retr_audios = [] # Force to only put captions
         #retr_captions = [] # Force to only put captions
-        prompt = "Similar audio sounds like "
+        #prompt = "Similar audio sounds like "
         with accelerator.autocast():
             gen_caption = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_captions=retr_captions, prompt=prompt)
             print(gen_caption)
