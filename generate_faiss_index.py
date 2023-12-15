@@ -32,23 +32,22 @@ retrieve_json_files = [
   './data/json_files/Clotho/train.json',
 ]
 
-query_json_files = [
-  './data/json_files/BBC_Sound_Effects/bbc_final.json',
-  './data/json_files/FreeSound/fsd_final.json',
-  './data/json_files/SoundBible/sb_final.json',
-  './data/json_files/AudioSet_SL/as_final.json',
-  './data/json_files/AudioSet/train.json',
-  './data/json_files/Clotho/train.json',
-]
-
 # query_json_files = [
+#   './data/json_files/BBC_Sound_Effects/bbc_final.json',
+#   './data/json_files/FreeSound/fsd_final.json',
+#   './data/json_files/SoundBible/sb_final.json',
+#   './data/json_files/AudioSet_SL/as_final.json',
 #   './data/json_files/AudioSet/train.json',
-#   './data/json_files/AudioSet/val.json',
 #   './data/json_files/Clotho/train.json',
-#   './data/json_files/Clotho/val.json',
 # ]
 
-#index_file_path = "./data/index/index_pretrain.faiss"
+query_json_files = [
+  './data/json_files/AudioSet/train.json',
+  './data/json_files/AudioSet/val.json',
+  './data/json_files/Clotho/train.json',
+  './data/json_files/Clotho/val.json',
+]
+
 audio_index_file_path = "./data/index/audio_index.faiss"
 text_index_file_path = "./data/index/text_index.faiss"
 index_exists = os.path.exists(audio_index_file_path)
@@ -210,7 +209,7 @@ class FaissSearcher:
         distances, indices = self.index.search(query_embed, self.top_k)
         return distances, indices
 
-search_actors = [FaissSearcher.remote(audio_index_cpu, nprobe=16, top_k=5) for _ in range(int(num_cpus))]
+search_actors = [FaissSearcher.remote(text_index_cpu, nprobe=16, top_k=5) for _ in range(int(num_cpus))]
 
 # Define a function to split query embeddings into batches
 def split_into_batches(embeddings, batch_size):

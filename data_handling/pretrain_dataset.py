@@ -48,6 +48,7 @@ class AudioLanguagePretrainDataset(Dataset):
         self.lengths = [item["duration"] for item in self.json_data]
         self.top_k = top_k
         self.retrieve_map = {}
+        # self.noisy_k = 4
         if retrieve_map:
             with open(retrieve_map, 'r') as file:
                 self.retrieve_map = json.load(file)
@@ -100,13 +101,17 @@ class AudioLanguagePretrainDataset(Dataset):
         caption = text_preprocess(caption)
         retr_audio_features = []
         retr_captions = []
-        if wav_path in self.retrieve_map:
+        if wav_path in self.retrieve_map and self.top_k > 0:
             retrieve_items = self.retrieve_map[wav_path]
             weights = list(range(len(retrieve_items), 0, -1))
             if self.train:
                 selected_items = random.choices(retrieve_items, weights=weights, k=self.top_k)
             else:
                 selected_items = retrieve_items[:self.top_k]
+            # for i in range(self.noisy_k): # Add noisy examples
+            #     other_key = random.choice([k for k in self.retrieve_map.keys() if k != wav_path])
+            #     random_item = random.choice(self.retrieve_map[other_key])
+            #     selected_items[i] = random_item
             retr_audio_features = [self.preprocess_waveform(retr_wav_path, duration) for (retr_wav_path, caption) in selected_items]
             retr_captions = [text_preprocess(caption) for (retr_wav_path, caption) in selected_items]
         return audio_feature, caption, wav_path, retr_audio_features, retr_captions
@@ -123,7 +128,7 @@ def pretrain_dataloader(config,
                         top_k=2,
                         shuffle=False):
     blacklist = None if 'val' in subset else config.blacklist
-    batch_size = 2 if 'val' in subset else config.data_args.batch_size
+    batch_size = 1 if 'val' in subset else config.data_args.batch_size
     dataset = AudioLanguagePretrainDataset(config[subset], config["audio_args"], blacklist, 'train' in subset, retrieve_map, top_k)
     if bucket:
         sampler = BySequenceLengthSampler(lengths=dataset.lengths,

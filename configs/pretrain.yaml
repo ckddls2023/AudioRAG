@@ -37,6 +37,7 @@ model_args:
   freeze_am: True
   unfreeze_am: []
   freeze_lm: True
+  #checkpoint_path: "./pretrained_models/pretrained_LGTM/"
   checkpoint_path: ""
   encoder:
     model_name: "CLAPAudioEncoder"
@@ -72,4 +73,6 @@ index_args:
   #index_path: "./data/index/final_index_big_kb/audio2audio_train.json"
   index_path: "./data/index/final_index_big_kb_pretrainQuery/audio2audio_pretrain.json"
   #index_path: "./data/index/final_index_big_kb/audio2audio_val.json"
-  top_k: 2
+  #index_path: "./data/index/final_index_big_kb/frame2frame_val.json"
+  #index_path: "./data/index/final_index_big_kb/audio2text_val.json"
+  top_k: 3

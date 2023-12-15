@@ -39,8 +39,6 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0):
     start_time = time.time()
     for batch_id, (audio, caption, audio_filenames, retr_audios, retr_captions) in enumerate(pbar := tqdm(dataloader, total=len(dataloader))):
         iter_time = time.time() - start_time
-        #retr_audios = [] # Force to only put captions for LGTM
-        #retr_captions = [[texts[0] for texts in caption]]
         with accelerator.accumulate(model):
             optimizer.zero_grad()
             step = len(dataloader) * (epoch - 1) + batch_id
@@ -78,9 +76,10 @@ def validate(data_loader, model, epoch):
         if not retr_captions: # If retrieved results is missing, num_captions = 5, choose 1
             retr_captions = [[texts[0] for texts in caption]]
         #retr_audios = [] # Force to only put captions
-        #retr_captions = [[texts[0] for texts in caption]]
+        #retr_captions = [] # Force to only put captions
+        prompt = "Similar audio sounds like "
         with accelerator.autocast():
-            gen_caption = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_captions=retr_captions)
+            gen_caption = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_captions=retr_captions, prompt=prompt)
             print(gen_caption)
             print(caption)
             gen_captions.extend(gen_caption)

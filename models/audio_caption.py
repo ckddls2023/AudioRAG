@@ -169,9 +169,8 @@ class CLAP2LLAMA(nn.Module):
         shifted_input_ids[:, prefix_length:] = input_ids.clone()
         shifted_input_ids[:, :prefix_length] = -100
         shifted_input_ids.masked_fill_(shifted_input_ids == self.tokenizer.pad_token_id, -100)
-        shifted_attn_mask = attn_mask.new_zeros((batch_size, seq_length + prefix_length))
+        shifted_attn_mask = attn_mask.new_ones((batch_size, seq_length + prefix_length))
         shifted_attn_mask[:, prefix_length:] = attn_mask.clone()
-        shifted_attn_mask[:, :prefix_length] = 1
         return shifted_input_ids, shifted_attn_mask
 
     def prepare_text_input(self, caption, device, add_special_tokens=True):
@@ -184,15 +183,20 @@ class CLAP2LLAMA(nn.Module):
         input_ids, attn_mask = self.prepare_text_input(caption, audio_embed.device)
         input_embeds = torch.cat((audio_embed, self.get_decoder_embeddings()(input_ids)), dim=1)
         shifted_input_ids, shifted_attn_mask = self.shift_and_pad_input(input_ids, attn_mask, audio_embed.shape[1])
-        if retr_audio_embeds:
-            for retr_audio_embed, retr_caption in zip(retr_audio_embeds, retr_captions):
-                retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_caption, audio_embed.device, add_special_tokens=False)
-                retr_input_embeds = torch.cat((retr_audio_embed, self.get_decoder_embeddings()(retr_input_ids[:,:-1])), dim=1) # Remove EOS token
-                shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(retr_input_ids[:,:-1], retr_attn_mask[:,:-1], retr_audio_embed.shape[1]) 
+        retr_nums = max(len(retr_audio_embeds), len(retr_captions))
+        for i in range(retr_nums): # Suppose we have only case ([],retr_captions), (retr_audio_embeds,[]), both pair with same length
+            if retr_captions: 
+                retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_captions[i], audio_embed.device, add_special_tokens=False)
+                input_embeds = torch.cat((self.get_decoder_embeddings()(retr_input_ids[:,:-1]), input_embeds), dim=1) 
+                shifted_attn_mask = torch.cat((retr_attn_mask[:,:-1], shifted_attn_mask), dim=1)
+                shifted_retr_ids = input_ids.new_zeros(input_ids.shape)
                 shifted_retr_ids[:,:] = -100 # Ignore all Wavcaps style
-                input_embeds = torch.cat((retr_input_embeds, input_embeds), dim=1)
                 shifted_input_ids = torch.cat((shifted_retr_ids, shifted_input_ids), dim=1)
-                shifted_attn_mask = torch.cat((shifted_retr_mask, shifted_attn_mask), dim=1)
+            if retr_audio_embeds: 
+                input_embeds = torch.cat((retr_audio_embeds[i], input_embeds), dim=1) 
+                shifted_retr_ids = input_ids.new_zeros(input_ids.shape[0],retr_audio_embeds.shape[1]) # B, prefix_length
+                shifted_retr_ids[:,:] = -100 # Ignore all Wavcaps style
+                shifted_input_ids = torch.cat((shifted_retr_ids, shifted_input_ids), dim=1)
         # bos = torch.ones([input_embeds.shape[0], 1],dtype=input_ids.dtype, device=audio_embed.device) * self.tokenizer.bos_token_id
         # bos_embeds = self.get_decoder_embeddings()(bos)
         # atts_bos = shifted_attn_mask[:, :1]
@@ -202,10 +206,8 @@ class CLAP2LLAMA(nn.Module):
         return output
 
     def forward(self, audio, caption, retr_audios=None, retr_captions=None):
-        encoder_caption = caption
         if retr_captions:
             encoder_caption = [' '.join(caption) for caption in zip(*retr_captions)] # B,K to B
-            #encoder_caption = retr_captions[0] # B,top_1
         audio_embed, loss = self.forward_encoder(audio, encoder_caption)  # Only for LGTM
         retr_audio_embeds = []
         if retr_audios:
@@ -252,33 +254,43 @@ class CLAP2LLAMA(nn.Module):
     def generate_caption(self, audio, caption=None, retr_audios=None, retr_captions=None, prompt=None):
         r"""Generate audio captions for each audio recording in a batch"""
         with torch.no_grad():
-            encoder_caption = caption
+            encoder_caption = []
             if retr_captions:
                 encoder_caption = [' '.join(caption) for caption in zip(*retr_captions)] # B,K to B
             input_embeds, loss = self.forward_encoder(audio, encoder_caption) # Only for LGTM, dict type will be better...
             batch_size, seq_length, _ = input_embeds.shape
-            shifted_attn_mask = input_embeds.new_zeros((batch_size, seq_length)).long()
-            shifted_attn_mask[:, :] = 1
-            if retr_audios is not None:
-                retr_audio_embeds = []
-                for retr_audio, retr_caption in zip(retr_audios, retr_captions):
-                    retr_embed, loss = self.forward_encoder(retr_audio, retr_caption)
-                    retr_audio_embeds.append(retr_embed)
-                for retr_audio_embed, retr_caption in zip(retr_audio_embeds, retr_captions):
-                    retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_caption, input_embeds.device)
-                    retr_input_embeds = torch.cat((retr_audio_embed, self.get_decoder_embeddings()(retr_input_ids)[:,:-1]), dim=1) # remove EOS token
-                    shifted_retr_ids, shifted_retr_mask = self.shift_and_pad_input(retr_input_ids[:,:-1], retr_attn_mask[:,:-1], retr_audio_embed.shape[1])
-                    input_embeds = torch.cat((retr_input_embeds, input_embeds), dim=1)
-                    shifted_attn_mask = torch.cat((shifted_retr_mask, shifted_attn_mask), dim=1)
+            shifted_attn_mask = input_embeds.new_ones((batch_size, seq_length)).long()
+            retr_audio_embeds = []
+            for i, retr_audio in enumerate(retr_audios):
+                if retr_captions:
+                    encoder_caption = retr_captions[i]
+                retr_embed, loss = self.forward_encoder(retr_audio, encoder_caption)
+                retr_audio_embeds.append(retr_embed)
+            retr_nums = max(len(retr_audio_embeds), len(retr_captions))
+            for i in range(retr_nums): # Suppose we have only case ([],retr_captions), (retr_audio_embeds,[]), both pair with same length
+                if retr_captions: 
+                    retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_captions[i], input_embeds.device, add_special_tokens=False)
+                    input_embeds = torch.cat((self.get_decoder_embeddings()(retr_input_ids[:,:-1]), input_embeds), dim=1) 
+                    shifted_attn_mask = torch.cat((retr_attn_mask[:,:-1], shifted_attn_mask), dim=1)
+                if retr_audio_embeds: 
+                    input_embeds = torch.cat((retr_audio_embeds[i], input_embeds), dim=1) 
+                    retr_attn_mask = shifted_attn_mask.new_ones(retr_audio_embeds[i].size()[:2]) # B, prefix
+                    shifted_attn_mask = torch.cat((retr_attn_mask, shifted_attn_mask), dim=1)
+            if prompt:
+                prompt = [prompt] * len(audio)
+                prompt_ids, prompt_mask = self.prepare_text_input(prompt, input_embeds.device, add_special_tokens=False)
+                bos_prompt_ids = torch.cat([prompt_ids.new_full((prompt_ids.size(0), 1), self.tokenizer.bos_token_id), prompt_ids], dim=1)
+                input_embeds = torch.cat((bos_prompt_ids, input_embeds), dim=1) 
+                shifted_attn_mask = torch.cat((prompt_mask, shifted_attn_mask), dim=1)
             outputs = self.decoder.generate(
                 inputs_embeds=input_embeds,
                 attention_mask=shifted_attn_mask,
                 num_beams=2,
                 min_length=0,
-                max_length=256,
+                max_new_tokens=128,
                 top_p=0.9,
                 do_sample=True,
-                repetition_penalty=1.1,
+                repetition_penalty=1.0,
                 use_cache=True,
                 #generation_config=self.generation_config,
             )
