@@ -34,10 +34,14 @@ data_args:
 
 model_args:
   name: "CLAP2LLAMA"
+  retr_prompt: ""
+  task_prompt: ""
   freeze_am: True
   unfreeze_am: []
   freeze_lm: True
-  checkpoint_path: "./pretrained_models/pretrained_LGTM/"
+  #checkpoint_path: "./pretrained_models/pretrained_MLP/" # 32, 16
+  checkpoint_path: "./pretrained_models/audio_caption_LGTM/"
+  #checkpoint_path: "./pretrained_models/pretrained_LGTM/"
   #checkpoint_path: ""
   encoder:
     model_name: "CLAPAudioEncoder"
@@ -70,6 +74,7 @@ training:
   validate: False
 
 index_args:
+  #index_path: ""
   #index_path: "./data/index/final_index_big_kb/audio2audio_train.json"
   #index_path: "./data/index/final_index_big_kb_pretrainQuery/audio2audio_pretrain.json"
   index_path: "./data/index/final_index_big_kb/audio2audio_val.json"

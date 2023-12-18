@@ -6,8 +6,8 @@ train_jsons: [
   'data/json_files/Clotho/train.json',
 ]
 val_jsons: [
-  "data/json_files/AudioSet/val.json",
-  #"data/json_files/Clotho/val.json",
+  #"data/json_files/AudioSet/val.json",
+  "data/json_files/Clotho/val.json",
 ]
 blacklist: ""
 # dataset == 'AudioCaps': sampling_rate = 32000
@@ -32,15 +32,22 @@ data_args:
 
 model_args:
   name: "CLAP2LLAMA"
+  retr_prompt: ""
+  task_prompt: ""
   freeze_am: True
   #unfreeze_am: ['model.audio_branch.layers.3.blocks.1']
   unfreeze_am: []
   freeze_lm: False
+  #checkpoint_path: "./finetuned_models/audio2audio_LGTM2/"
+  checkpoint_path: "./finetuned_models/audio2audio_LGTM/"
   #checkpoint_path: "./finetuned_models/audio2audio_MLP/"
   #checkpoint_path: "./finetuned_models/frame2audio_MLP/"
-  checkpoint_path: "./finetuned_models/audio2text_MLP/"
+  #checkpoint_path: "./finetuned_models/audio2text_MLP/"
+  #checkpoint_path: "./finetuned_models/textonly_MLP/"
   #checkpoint_path: "./finetuned_models/finetuned_MLP/"
-  #checkpoint_path: "./pretrained_models/pretrained_MLP/"
+  #checkpoint_path: "./finetuned_models/finetuned_LGTM/"
+  #checkpoint_path: "./pretrained_models/pretrained_MLP/" # 32, 16
+  #checkpoint_path: "./pretrained_models/pretrained_LGTM/" # 8, 8
   encoder:
     model_name: "CLAPAudioEncoder"
     pretrained: True
@@ -49,10 +56,10 @@ model_args:
     select_feature: "fine_grained_embedding"
     sequence_length: 1024
     hidden_size: 768
-    window_size: 32 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
-    step_size: 16
+    window_size: 8 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
+    step_size: 8
   align:
-    model_name: "MLP"
+    model_name: "LGTM"
   # peft_config:
   #   type: "LORA"
   #   r: 16
@@ -94,7 +101,7 @@ training:
   warmup_epochs: 2
   epochs: 10
   clip_grad: 2
-  output_path: "./finetuned_models/frame2audio_MLP/"
+  output_path: "./finetuned_models/finetuned_LGTM/"
   eval: True
   validate: False
   
@@ -103,7 +110,9 @@ index_args:
   #index_path: "./data/index/final_index_big_kb/frame2frame_train.json"
   #index_path: "./data/index/final_index_big_kb/frame2frame_val.json"
   #index_path: "./data/index/final_index_big_kb/audio2text_train.json"
-  index_path: "./data/index/final_index_big_kb/audio2text_val.json"
+  #index_path: "./data/index/final_index_big_kb/audio2text_val.json"
   #index_path: "./data/index/final_index_big_kb/audio2audio_train.json"
   #index_path: "./data/index/final_index_big_kb/audio2audio_val.json"
+  index_path: "./data/index/final_index_big_kb_clotho/audio2audio_val.json"
+  #index_path: "./data/index/final_index_big_kb_clotho/audio2text_val.json"
   top_k: 2

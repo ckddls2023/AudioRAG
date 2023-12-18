@@ -30,6 +30,8 @@ class CLAP2LLAMA(nn.Module):
         self.decoder.config.pad_token_id = self.tokenizer.pad_token_id
         self.tokenizer.padding_side = "right"
         self.tokenizer.model_max_length = 256
+        self.retr_prompt = config.retr_prompt
+        self.task_prompt = config.task_prompt
         #if self.tokenizer.pad_token is None:
         #    self.tokenizer.pad_token = self.tokenizer.eos_token
         #    self.decoder.config.pad_token_id = self.decoder.config.eos_token_id
@@ -102,6 +104,10 @@ class CLAP2LLAMA(nn.Module):
                 p.requires_grad = False
                 if any(name.startswith(prefix) for prefix in config.unfreeze_am):
                     p.requires_grad = True
+            
+        # Freeze all alignment paramters
+        # for param in self.enc_to_dec_proj.parameters():
+        #     param.requires_grad = False
 
         # Freeze all LM parameters
         if self.freeze_lm:
@@ -178,30 +184,39 @@ class CLAP2LLAMA(nn.Module):
         input_ids = tokenized_text["input_ids"].to(device)
         attn_mask = tokenized_text["attention_mask"].to(device)
         return input_ids, attn_mask
+    
+    def insert_prompt(self, prompt, input_embeds, shifted_input_ids, shifted_attn_mask):
+        if prompt:
+            prompts = [prompt] * input_embeds.shape[0]
+            prompt_ids, prompt_mask = self.prepare_text_input(prompts, input_embeds.device, add_special_tokens=False)
+            input_embeds = torch.cat((self.get_decoder_embeddings()(prompt_ids), input_embeds), dim=1)
+            prompt_ids[:, :] = -100  # Ignore prompt
+            if shifted_input_ids is not None:
+                shifted_input_ids = torch.cat((prompt_ids, shifted_input_ids), dim=1)
+            shifted_attn_mask = torch.cat((prompt_mask, shifted_attn_mask), dim=1)
+        return input_embeds, shifted_input_ids, shifted_attn_mask
 
     def forward_decoder(self, audio_embed, caption, retr_audio_embeds=None, retr_captions=None):
         input_ids, attn_mask = self.prepare_text_input(caption, audio_embed.device)
         input_embeds = torch.cat((audio_embed, self.get_decoder_embeddings()(input_ids)), dim=1)
         shifted_input_ids, shifted_attn_mask = self.shift_and_pad_input(input_ids, attn_mask, audio_embed.shape[1])
+        input_embeds, shifted_input_ids, shifted_attn_mask = self.insert_prompt(self.task_prompt, input_embeds, shifted_input_ids, shifted_attn_mask)
         retr_nums = max(len(retr_audio_embeds), len(retr_captions))
         for i in range(retr_nums): # Suppose we have only case ([],retr_captions), (retr_audio_embeds,[]), both pair with same length
             if retr_captions: 
                 retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_captions[i], audio_embed.device, add_special_tokens=False)
-                input_embeds = torch.cat((self.get_decoder_embeddings()(retr_input_ids[:,:-1]), input_embeds), dim=1) 
-                shifted_attn_mask = torch.cat((retr_attn_mask[:,:-1], shifted_attn_mask), dim=1)
-                shifted_retr_ids = input_ids.new_zeros(input_ids.shape)
-                shifted_retr_ids[:,:] = -100 # Ignore all Wavcaps style
-                shifted_input_ids = torch.cat((shifted_retr_ids, shifted_input_ids), dim=1)
+                input_embeds = torch.cat((self.get_decoder_embeddings()(retr_input_ids), input_embeds), dim=1) 
+                #retr_input_ids[:,:] = -100 # Ignore all Wavcaps style
+                retr_input_ids.masked_fill_(retr_input_ids == self.tokenizer.pad_token_id, -100)
+                shifted_input_ids = torch.cat((retr_input_ids, shifted_input_ids), dim=1)
+                shifted_attn_mask = torch.cat((retr_attn_mask, shifted_attn_mask), dim=1)
             if retr_audio_embeds: 
                 input_embeds = torch.cat((retr_audio_embeds[i], input_embeds), dim=1) 
-                shifted_retr_ids = input_ids.new_zeros(input_ids.shape[0],retr_audio_embeds.shape[1]) # B, prefix_length
-                shifted_retr_ids[:,:] = -100 # Ignore all Wavcaps style
-                shifted_input_ids = torch.cat((shifted_retr_ids, shifted_input_ids), dim=1)
-        # bos = torch.ones([input_embeds.shape[0], 1],dtype=input_ids.dtype, device=audio_embed.device) * self.tokenizer.bos_token_id
-        # bos_embeds = self.get_decoder_embeddings()(bos)
-        # atts_bos = shifted_attn_mask[:, :1]
-        # input_embeds = torch.cat((bos_embeds, input_embeds), dim=1)
-        # shifted_attn_mask = torch.cat((atts_bos, shifted_attn_mask), dim=1)
+                retr_input_ids = input_ids.new_zeros(input_ids.shape[0],retr_audio_embeds[i].shape[1]) # B, prefix_length
+                retr_input_ids[:,:] = -100 # Ignore all embeds
+                shifted_input_ids = torch.cat((retr_input_ids, shifted_input_ids), dim=1)
+                shifted_attn_mask = torch.cat((shifted_attn_mask.new_ones(retr_audio_embeds[i].size()[:2]), shifted_attn_mask), dim=1)
+        input_embeds, shifted_input_ids, shifted_attn_mask = self.insert_prompt(self.retr_prompt, input_embeds, shifted_input_ids, shifted_attn_mask)
         output = self.decoder(inputs_embeds=input_embeds, labels=shifted_input_ids, attention_mask=shifted_attn_mask)
         return output
 
@@ -211,8 +226,13 @@ class CLAP2LLAMA(nn.Module):
         audio_embed, loss = self.forward_encoder(audio, encoder_caption)  # Only for LGTM
         retr_audio_embeds = []
         if retr_audios:
-            for retr_audio, retr_caption in zip(retr_audios, retr_captions):
-                retr_embed, _ = self.forward_encoder(retr_audio, retr_caption)
+            for i, (retr_audio, retr_caption) in enumerate(zip(retr_audios, retr_captions)):
+                #encoder_captions = retr_captions[:i] + retr_captions[i+1:] # B, K
+                #encoder_caption = [' '.join(caption) for caption in zip(*encoder_captions)] # B,K to B
+                encoder_caption = retr_caption
+                retr_embed, _ = self.forward_encoder(retr_audio, encoder_caption)
+                if self.config.align.model_name == "LGTM": # Should be detached..?
+                    retr_embed = retr_embed.detach()
                 retr_audio_embeds.append(retr_embed)
         output = self.forward_decoder(audio_embed, caption, retr_audio_embeds, retr_captions)
         if loss is not None:
@@ -251,7 +271,7 @@ class CLAP2LLAMA(nn.Module):
             print("Load LORA model")
             self.decoder = PeftModel.from_pretrained(self.decoder.base_model, checkpoint_path, config=self.peft_config)  # suppose don't use get_peft_model
 
-    def generate_caption(self, audio, caption=None, retr_audios=None, retr_captions=None, prompt=None):
+    def generate_caption(self, audio, caption=None, retr_audios=None, retr_captions=None):
         r"""Generate audio captions for each audio recording in a batch"""
         with torch.no_grad():
             encoder_caption = []
@@ -261,26 +281,23 @@ class CLAP2LLAMA(nn.Module):
             batch_size, seq_length, _ = input_embeds.shape
             shifted_attn_mask = input_embeds.new_ones((batch_size, seq_length)).long()
             retr_audio_embeds = []
-            for i, retr_audio in enumerate(retr_audios):
-                if retr_captions:
-                    encoder_caption = retr_captions[i]
+            for i, (retr_audio, retr_caption) in enumerate(zip(retr_audios, retr_captions)): # Only LGTM needs retr_text, others ignore
+                #encoder_captions = retr_captions[:i] + retr_captions[i+1:] # B, K
+                #encoder_caption = [' '.join(caption) for caption in zip(*encoder_captions)] # B,K to B
+                encoder_caption = retr_caption
                 retr_embed, loss = self.forward_encoder(retr_audio, encoder_caption)
                 retr_audio_embeds.append(retr_embed)
             retr_nums = max(len(retr_audio_embeds), len(retr_captions))
             for i in range(retr_nums): # Suppose we have only case ([],retr_captions), (retr_audio_embeds,[]), both pair with same length
                 if retr_captions: 
                     retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_captions[i], input_embeds.device, add_special_tokens=False)
-                    input_embeds = torch.cat((self.get_decoder_embeddings()(retr_input_ids[:,:-1]), input_embeds), dim=1) 
-                    shifted_attn_mask = torch.cat((retr_attn_mask[:,:-1], shifted_attn_mask), dim=1)
+                    input_embeds = torch.cat((self.get_decoder_embeddings()(retr_input_ids), input_embeds), dim=1) 
+                    shifted_attn_mask = torch.cat((retr_attn_mask, shifted_attn_mask), dim=1)
                 if retr_audio_embeds: 
                     input_embeds = torch.cat((retr_audio_embeds[i], input_embeds), dim=1) 
                     retr_attn_mask = shifted_attn_mask.new_ones(retr_audio_embeds[i].size()[:2]) # B, prefix
                     shifted_attn_mask = torch.cat((retr_attn_mask, shifted_attn_mask), dim=1)
-            if prompt:
-                prompts = [prompt] * input_embeds.shape[0]
-                prompt_ids, prompt_mask = self.prepare_text_input(prompts, input_embeds.device, add_special_tokens=False)
-                input_embeds = torch.cat((self.get_decoder_embeddings()(prompt_ids), input_embeds), dim=1) 
-                shifted_attn_mask = torch.cat((prompt_mask, shifted_attn_mask), dim=1)
+            input_embeds, _, shifted_attn_mask = self.insert_prompt(self.retr_prompt, input_embeds, None, shifted_attn_mask)
             outputs = self.decoder.generate(
                 inputs_embeds=input_embeds,
                 attention_mask=shifted_attn_mask,
