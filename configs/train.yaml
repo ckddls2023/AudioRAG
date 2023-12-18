@@ -6,8 +6,8 @@ train_jsons: [
   'data/json_files/Clotho/train.json',
 ]
 val_jsons: [
-  #"data/json_files/AudioSet/val.json",
-  "data/json_files/Clotho/val.json",
+  "data/json_files/AudioSet/val.json",
+  #"data/json_files/Clotho/val.json",
 ]
 blacklist: ""
 # dataset == 'AudioCaps': sampling_rate = 32000
@@ -38,14 +38,15 @@ model_args:
   #unfreeze_am: ['model.audio_branch.layers.3.blocks.1']
   unfreeze_am: []
   freeze_lm: False
+  #checkpoint_path: "./finetuned_models/audio2audio_LGTM3/"
   #checkpoint_path: "./finetuned_models/audio2audio_LGTM2/"
-  checkpoint_path: "./finetuned_models/audio2audio_LGTM/"
+  #checkpoint_path: "./finetuned_models/audio2audio_LGTM/"
   #checkpoint_path: "./finetuned_models/audio2audio_MLP/"
   #checkpoint_path: "./finetuned_models/frame2audio_MLP/"
   #checkpoint_path: "./finetuned_models/audio2text_MLP/"
   #checkpoint_path: "./finetuned_models/textonly_MLP/"
   #checkpoint_path: "./finetuned_models/finetuned_MLP/"
-  #checkpoint_path: "./finetuned_models/finetuned_LGTM/"
+  checkpoint_path: "./finetuned_models/finetuned_LGTM/"
   #checkpoint_path: "./pretrained_models/pretrained_MLP/" # 32, 16
   #checkpoint_path: "./pretrained_models/pretrained_LGTM/" # 8, 8
   encoder:
@@ -95,7 +96,7 @@ optim_args:
   eps: 1e-8
   momentum: 0.9
   gamma: 0.1
-  weight_decay: 0.001
+  weight_decay: 0.01
 
 training:
   warmup_epochs: 2
@@ -112,7 +113,8 @@ index_args:
   #index_path: "./data/index/final_index_big_kb/audio2text_train.json"
   #index_path: "./data/index/final_index_big_kb/audio2text_val.json"
   #index_path: "./data/index/final_index_big_kb/audio2audio_train.json"
-  #index_path: "./data/index/final_index_big_kb/audio2audio_val.json"
-  index_path: "./data/index/final_index_big_kb_clotho/audio2audio_val.json"
+  index_path: "./data/index/final_index_big_kb/audio2audio_val.json"
+  #index_path: "./data/index/final_index_big_kb_clotho/audio2audio_val.json"
   #index_path: "./data/index/final_index_big_kb_clotho/audio2text_val.json"
+  #index_path: "./data/index/final_index_big_kb_clotho/frame2frame_val.json"
   top_k: 2

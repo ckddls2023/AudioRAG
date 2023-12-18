@@ -445,3 +445,4 @@ pretrained_models/
 finetuned_models/
 generate_audioset_tag/
 checkpoint/
+*.gguf

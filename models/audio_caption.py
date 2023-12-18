@@ -227,9 +227,9 @@ class CLAP2LLAMA(nn.Module):
         retr_audio_embeds = []
         if retr_audios:
             for i, (retr_audio, retr_caption) in enumerate(zip(retr_audios, retr_captions)):
-                #encoder_captions = retr_captions[:i] + retr_captions[i+1:] # B, K
-                #encoder_caption = [' '.join(caption) for caption in zip(*encoder_captions)] # B,K to B
-                encoder_caption = retr_caption
+                encoder_captions = retr_captions[:i] + retr_captions[i+1:] # B, K
+                encoder_caption = [' '.join(caption) for caption in zip(*encoder_captions)] # B,K to B
+                #encoder_caption = retr_caption
                 retr_embed, _ = self.forward_encoder(retr_audio, encoder_caption)
                 if self.config.align.model_name == "LGTM": # Should be detached..?
                     retr_embed = retr_embed.detach()
@@ -303,7 +303,7 @@ class CLAP2LLAMA(nn.Module):
                 attention_mask=shifted_attn_mask,
                 num_beams=2,
                 min_length=0,
-                max_new_tokens=128,
+                max_new_tokens=256,
                 top_p=0.9,
                 do_sample=True,
                 repetition_penalty=1.0,

@@ -1,6 +1,7 @@
 import json
 import os
 from openai import OpenAI
+from llama_cpp import Llama
 
 query_json_files = [
   './data/json_files/AudioSet/train.json',
@@ -9,11 +10,16 @@ query_json_files = [
   './data/json_files/Clotho/val.json',
 ]
 
-# new
+llm = Llama(model_path="/home/ckddls1321/.cache/checkpoints/solar-10.7b-instruct-v1.0.Q5_K_S.gguf", 
+            chat_format="llama-2",
+            n_threads=16,            # The number of CPU threads to use, tailor to your system and the resulting performance
+            n_gpu_layers=35,         # The number of layers to offload to GPU, if you have GPU acceleration available
+            n_ctx=4096  # The max sequence length to use - note that longer sequence lengths require much more resources
+)  
 
-client = OpenAI(
-  api_key=os.environ['OPENAI_API_KEY'],  # this is also the default, it can be omitted
-)
+# client = OpenAI(
+#   api_key=os.environ['OPENAI_API_KEY'],  # this is also the default, it can be omitted
+# )
 
 query_data = []
 for json_file in query_json_files:
@@ -28,41 +34,46 @@ for json_file in query_json_files:
         if data["num_captions_per_audio"] > 1:
             captions = ""
             for caption in entry["caption"]:
-                captions += f"- {caption}\n"
-        else:
-            captions = "- {}".format(captions)
+                captions += f"{caption}\n"
             
         prompt = f"""
-            ### Instruction:
-            Your task is to simplify complex audio descriptions into short, clear, distinct tags. When simplifying, focus on capturing the essence of each description in as few words as possible. Omit any unnecessary details or ambiguous phrases. 
-
-            Examples:
-            1. Original: "Birds chirp and a pop occurs before a man speaks" 
-            Simplified: "Bird chirp, Man speaks"
-
-            2. Original: "A vehicle revving in the distance followed by a man shouting in the distance then a vehicle engine running idle before accelerating and driving off"
-            Simplified: "Vehicle revving, Man shouting, Driving off"
-
-            3. Original: "An engine increases in speed as a horn honks and a man speaks"
-            Simplified: "Engine accelerates, Horn sounds, Man speaks"
-
-            Your goal is to maintain the core information while making each sentence as straightforward and concise as possible. 
-
-            Extract distinct tags from the following audio captions:\n
-            {captions}\n
-            ### Response:
+            Your task is to extract distinct tags from audio caption. 
+            When extract tag, focus on capturing the essence of each description. 
+            Omit any unnecessary details or ambiguous phrases. 
+            Extract distinct tags from the following audio caption. 
+            Tag should be composed of more than two words. 
+            Answer only one setence of tags with delimeter ','.
+            
+            Caption: 'Birds chirp and a pop occurs before a man speaks' 
+            Tags: 'Bird chirp, Man speaks'
+            Caption: 'An engine increases in speed as a horn honks and a man speaks'
+            Tags: 'Engine accelerates, Horn honks, Man speaks'
+            Caption: "{captions}"
+            Tags: 
         """
-        chat_completion = client.chat.completions.create(
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
-            model="gpt-4-0314",
-        )
-        entry["gpt_tag"] = chat_completion.choices[0].message.content
+        
+        # Chat Completion API
+        # Continue making requests until completion_tokens > 0
+        completion_tokens = 0
+        while completion_tokens <= 0:
+            chat_completion = llm.create_chat_completion(
+                messages = [
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            completion_tokens = chat_completion['usage']['completion_tokens']
+        # chat_completion = client.chat.completions.create(
+        #     messages=[
+        #         {
+        #             "role": "user",
+        #             "content": prompt,
+        #         }
+        #     ],
+        #     model="gpt-4-0314",
+        # )
+        entry["gpt_tag"] = chat_completion['choices'][0]['message']['content'].replace("[SOLUTION]","").replace("[SOL]","").replace("Tags: ","").replace(": ")
         print(entry["gpt_tag"])
+        llm.reset()
     # Write the modified data back to the same JSON file
     with open(json_file, 'w') as file:
         json.dump(data, file, indent=4)
