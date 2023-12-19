@@ -48,7 +48,7 @@ class AudioLanguagePretrainDataset(Dataset):
         self.lengths = [item["duration"] for item in self.json_data]
         self.top_k = top_k
         self.retrieve_map = {}
-        # self.noisy_k = 4
+        self.noisy_k = 0
         if retrieve_map:
             with open(retrieve_map, 'r') as file:
                 self.retrieve_map = json.load(file)

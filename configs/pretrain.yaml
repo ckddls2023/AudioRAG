@@ -40,9 +40,9 @@ model_args:
   unfreeze_am: []
   freeze_lm: True
   #checkpoint_path: "./pretrained_models/pretrained_MLP/" # 32, 16
-  checkpoint_path: "./pretrained_models/audio_caption_LGTM/"
+  #checkpoint_path: "./pretrained_models/audio_caption_LGTM/"
   #checkpoint_path: "./pretrained_models/pretrained_LGTM/"
-  #checkpoint_path: ""
+  checkpoint_path: ""
   encoder:
     model_name: "CLAPAudioEncoder"
     pretrained: True
@@ -51,8 +51,8 @@ model_args:
     select_feature: "fine_grained_embedding"
     sequence_length: 1024
     hidden_size: 768
-    window_size: 8 # (32,32) = [B,32,H], (32,16) = [B,63,H] (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
-    step_size: 8
+    window_size: 4 # (32,32) = [B,32,H], (32,16) = [B,63,H] (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
+    step_size: 4
   align:
     model_name: "LGTM"
 
@@ -70,14 +70,14 @@ training:
   epochs: 5
   clip_grad: 2
   output_path: "./pretrained_models/audio_caption_LGTM/"
-  eval: True
+  eval: False
   validate: False
 
 index_args:
   #index_path: ""
   #index_path: "./data/index/final_index_big_kb/audio2audio_train.json"
-  #index_path: "./data/index/final_index_big_kb_pretrainQuery/audio2audio_pretrain.json"
-  index_path: "./data/index/final_index_big_kb/audio2audio_val.json"
+  index_path: "./data/index/final_index_big_kb_pretrainQuery/audio2audio_pretrain.json"
+  #index_path: "./data/index/final_index_big_kb/audio2audio_val.json"
   #index_path: "./data/index/final_index_big_kb/frame2frame_val.json"
   #index_path: "./data/index/final_index_big_kb/audio2text_val.json"
-  top_k: 1
+  top_k: 2

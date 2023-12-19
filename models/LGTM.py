@@ -6,6 +6,18 @@ import torch.nn.functional as F
 from torch.nn import TransformerDecoderLayer
 from transformers import T5EncoderModel, T5Tokenizer
 from models.Qformer import *
+
+class GatedNetwork(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super(GatedNetwork, self).__init__()
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, output_dim)
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return self.softmax(x)
 class LGTM(nn.Module):
     def __init__(self,
                  hidden_size=768,
@@ -45,6 +57,8 @@ class LGTM(nn.Module):
         self.audio_query_tokens = nn.Parameter(torch.zeros(1, 64, self.hidden_size))
         self.audio_query_tokens.data.normal_(mean=0.0, std=config.initializer_range)
         self.dropout = nn.Dropout(p=0.2)
+        self.gated_network = GatedNetwork(input_dim=self.hidden_size, hidden_dim=128, output_dim=2)
+
 
     def forward(self, audio_embeds, caption):
         # Embed text using T5 encoder
@@ -74,20 +88,27 @@ class LGTM(nn.Module):
         logits_per_audio_feat = attention_score.max(-1)[0] # [B,S]
         token_index = torch.topk(logits_per_audio_feat, self.num_latents, dim=1)[1]
         sorted_index = torch.sort(token_index, dim=1)[0]
-        fused_embed = torch.concat([audio_embeds,audio_text_embeds],dim=1)
+        #fused_embed = torch.concat([audio_embeds,audio_text_embeds],dim=1)
+        fused_embed = audio_embeds + audio_text_embeds
         B, S, H = fused_embed.size()
         mask = torch.ones(B, S, dtype=torch.bool, device=audio_embeds.device) # 
         mask[torch.arange(B).unsqueeze(1), sorted_index] = False # for K,V
         audio_embed_query = fused_embed[~mask].view(B,-1,H) # top_k token
         audio_embed_key_value = fused_embed[mask].view(B,-1,H) # other tokens
         attn_mask = torch.ones(audio_embed_key_value.size()[:-1], dtype=torch.long).to(audio_embeds.device)
-        # Self token merger
+        # Self token merger, mergy surrounding tokens in query tokens
         output = self.token_merger.bert(
-            query_embeds=audio_embed_query+self.audio_query_tokens, # [B,64,H]
+            query_embeds=self.audio_query_tokens, # [B,64,H]
             encoder_hidden_states=audio_embed_key_value, # [B,S-64,H]
             encoder_attention_mask=attn_mask, # [B,S-64,H]
             return_dict=True,
         )
+        B, _, H = fused_embed.size()
+        gate_input = torch.stack([output.last_hidden_state, audio_embed_query], dim=1)
+        gate_input = gate_input.view(-1, H)  # Reshape for the gated network
+        gating_weights = self.gated_network(gate_input).view(B, 2, -1)
+        output.last_hidden_state = gating_weights[:, 0, :, None] * output.last_hidden_state + \
+                       gating_weights[:, 1, :, None] * audio_embed_query
         return output, None
         # ATC : Audio-Text Contrastive Alignment, add loss as auxilarity loss, no contrastive, SimSiam
         # labels = torch.arange(audio_embeds.shape[0], device=audio_embeds.device, dtype=torch.long)

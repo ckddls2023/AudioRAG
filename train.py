@@ -39,7 +39,7 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0):
     start_time = time.time()
     for batch_id, (audio, caption, audio_filenames, retr_audios, retr_captions) in enumerate(pbar := tqdm(dataloader, total=len(dataloader))):
         iter_time = time.time() - start_time
-        #retr_audios = [] # Force to only put captions
+        retr_audios = [] # Force to only put captions
         #retr_captions = [] # Force to only put captions
         with accelerator.accumulate(model):
             optimizer.zero_grad()

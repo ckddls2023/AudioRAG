@@ -60,26 +60,29 @@ for json_file in query_json_files:
         
         # Chat Completion API
         # Continue making requests until completion_tokens > 0
-        completion_tokens = 0
-        chat_completion = llm.create_chat_completion(
-            messages = [
-                {"role": "user", "content": prompt}
-            ]
-        )
-        # chat_completion = client.chat.completions.create(
-        #     messages=[
-        #         {
-        #             "role": "user",
-        #             "content": prompt,
-        #         }
-        #     ],
-        #     model="gpt-4-0314",
-        # )
-        completion_tokens = chat_completion['usage']['completion_tokens']
-        if completion_tokens > 0 and completion_tokens < 60:
-            entry["tag"] = remove_parentheses(chat_completion['choices'][0]['message']['content'].replace("[SOLUTION]","").replace("[SOL]","").replace("Tags: ","").replace(": ",""))
+        if isinstance(entry["tag"], list): # Not processed tags
+            completion_tokens = 0
+            chat_completion = llm.create_chat_completion(
+                messages = [
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            # chat_completion = client.chat.completions.create(
+            #     messages=[
+            #         {
+            #             "role": "user",
+            #             "content": prompt,
+            #         }
+            #     ],
+            #     model="gpt-4-0314",
+            # )
+            completion_tokens = chat_completion['usage']['completion_tokens']
+            if completion_tokens > 0 and completion_tokens < 60:
+                entry["tag"] = remove_parentheses(chat_completion['choices'][0]['message']['content'].replace("[SOLUTION]","").replace("[SOL]","").replace("Tags: ","").replace(": ",""))
+            else:
+                entry["tag"] = ','.join(entry["tag"]) # convert to comma-seperate tag
+            llm.reset()
         print(entry["tag"])
-        llm.reset()
     # Write the modified data back to the same JSON file
     with open(json_file, 'w') as file:
         json.dump(data, file, indent=4)
