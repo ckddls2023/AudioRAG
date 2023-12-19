@@ -17,11 +17,13 @@ fi
 # Check if there is only 1 GPU in CUDA_VISIBLE_DEVICES
 if [ "$NUM_GPUS" -eq 1 ]; then
     MULTI_GPU=""
+    MIXED_PRECISION="--mixed_precision no"
 else
     MULTI_GPU="--multi_gpu"
+    MIXED_PRECISION="--mixed_precision bf16"
 fi
 
-accelerate launch --num_processes $NUM_GPUS --num_machines $NUM_HOSTS $MULTI_GPU --mixed_precision bf16 --machine_rank 0 --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT train.py --config configs/train.yaml
+accelerate launch --num_processes $NUM_GPUS --num_machines $NUM_HOSTS $MULTI_GPU $MIXED_PRECISION --machine_rank 0 --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT train.py --config configs/train.yaml
 
 # For Multi-node
 #SSH='ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no $hostn'

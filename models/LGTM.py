@@ -7,25 +7,14 @@ from torch.nn import TransformerDecoderLayer
 from transformers import T5EncoderModel, T5Tokenizer
 from models.Qformer import *
 
-class GatedNetwork(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim):
-        super(GatedNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
-        self.softmax = nn.Softmax(dim=1)
-
-    def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        return self.softmax(x)
 class LGTM(nn.Module):
     def __init__(self,
                  hidden_size=768,
-                 num_latents=64,
+                 num_latents=32,
                  num_layers=2,
                  ):
         super().__init__()
-        self.num_latents=64
+        self.num_latents=num_latents
         self.hidden_size = hidden_size
         self.tokenizer = T5Tokenizer.from_pretrained("google/flan-t5-base")
         self.text_encoder = T5EncoderModel.from_pretrained("google/flan-t5-base")
@@ -38,26 +27,39 @@ class LGTM(nn.Module):
         config.add_cross_attention = True
         config.cross_attention_freq = 1
         config.query_length = num_latents # number of latents
-        self.audio2text_xattn = BertLMHeadModel(config=config) # cross-attention with text encoder
-        self.audio2text_xattn.cls = None
-        self.audio2text_xattn.bert.embeddings.word_embeddings = None
-        self.audio2text_xattn.bert.embeddings.position_embeddings = None
-        for layer in self.audio2text_xattn.bert.encoder.layer:
+        self.text_token_merger = BertLMHeadModel(config=config)   # cross-attention with audio token
+        self.text_token_merger.cls = None
+        self.text_token_merger.bert.embeddings.word_embeddings = None
+        self.text_token_merger.bert.embeddings.position_embeddings = None
+        for layer in self.text_token_merger.bert.encoder.layer:
             layer.output = None
             layer.intermediate = None
-        self.token_merger = BertLMHeadModel(config=config)   # cross-attention with audio token
+        self.audio_token_merger = BertLMHeadModel(config=config)   # cross-attention with latent query audio
+        self.audio_token_merger.cls = None
+        self.audio_token_merger.bert.embeddings.word_embeddings = None
+        self.audio_token_merger.bert.embeddings.position_embeddings = None
+        for layer in self.audio_token_merger.bert.encoder.layer:
+            layer.output = None
+            layer.intermediate = None
+        self.token_merger = BertLMHeadModel(config=config)   # select token of original modality and map again
         self.token_merger.cls = None
         self.token_merger.bert.embeddings.word_embeddings = None
         self.token_merger.bert.embeddings.position_embeddings = None
-        for layer in self.token_merger.bert.encoder.layer:
+        for layer in self.audio_token_merger.bert.encoder.layer:
             layer.output = None
             layer.intermediate = None
-        self.temperature = 0.2
-        #self.projection_head = nn.Linear(hidden_size, hidden_size, bias=False) # From SimSiam
-        self.audio_query_tokens = nn.Parameter(torch.zeros(1, 64, self.hidden_size))
+        config.add_cross_attention = False
+        self.token_selection = BertLMHeadModel(config=config) # cross-attention with text encoder
+        self.token_selection.cls = None
+        self.token_selection.bert.embeddings.word_embeddings = None
+        self.token_selection.bert.embeddings.position_embeddings = None
+        for layer in self.token_selection.bert.encoder.layer:
+            layer.output = None
+            layer.intermediate = None
+        self.audio_query_tokens = nn.Parameter(torch.zeros(1, self.num_latents, self.hidden_size))
         self.audio_query_tokens.data.normal_(mean=0.0, std=config.initializer_range)
-        self.dropout = nn.Dropout(p=0.2)
-        self.gated_network = GatedNetwork(input_dim=self.hidden_size, hidden_dim=128, output_dim=2)
+        self.text_query_tokens = nn.Parameter(torch.zeros(1, self.num_latents, self.hidden_size))
+        self.text_query_tokens.data.normal_(mean=0.0, std=config.initializer_range)
 
 
     def forward(self, audio_embeds, caption):
@@ -71,64 +73,53 @@ class LGTM(nn.Module):
             output_attentions=False,
             return_dict=True
         )
+        # Extract text information to learnable latent query
         text_embeds = text_encoder_output.last_hidden_state # [B,S,H]
-        # Cross Attend to T5, single layer
-        output = self.audio2text_xattn.bert(
-            query_embeds=audio_embeds,  # [B,S,H]
-            encoder_hidden_states=text_embeds,
-            encoder_attention_mask=attention_mask,
+        output = self.text_token_merger.bert(
+            query_embeds=self.text_query_tokens,
+            encoder_hidden_states=text_embeds, 
+            encoder_attention_mask=attention_mask, 
+            return_dict=True,
+        )
+        latent_text_embeds = output.last_hidden_state  # B. 32, H
+        
+        # Extract audio information to learnable latent query
+        attn_mask = torch.ones(audio_embeds.size()[:-1], dtype=torch.long).to(audio_embeds.device)
+        output = self.audio_token_merger.bert(
+            query_embeds=self.audio_query_tokens,
+            encoder_hidden_states=audio_embeds, 
+            encoder_attention_mask=attn_mask, 
             output_attentions=True,
             return_dict=True,
         )
-        audio_text_embeds = output.last_hidden_state
-        audio_text_embeds = self.dropout(audio_text_embeds) # Regularize text
-        attention_scores = output.cross_attentions
-        attention_score = attention_scores[-1] # Get last layer attention
-        attention_score = attention_score.mean(dim=1) # [B,S,T]
-        logits_per_audio_feat = attention_score.max(-1)[0] # [B,S]
-        token_index = torch.topk(logits_per_audio_feat, self.num_latents, dim=1)[1]
-        sorted_index = torch.sort(token_index, dim=1)[0]
-        #fused_embed = torch.concat([audio_embeds,audio_text_embeds],dim=1)
-        fused_embed = audio_embeds + audio_text_embeds
-        B, S, H = fused_embed.size()
-        mask = torch.ones(B, S, dtype=torch.bool, device=audio_embeds.device) # 
-        mask[torch.arange(B).unsqueeze(1), sorted_index] = False # for K,V
-        audio_embed_query = fused_embed[~mask].view(B,-1,H) # top_k token
-        audio_embed_key_value = fused_embed[mask].view(B,-1,H) # other tokens
-        attn_mask = torch.ones(audio_embed_key_value.size()[:-1], dtype=torch.long).to(audio_embeds.device)
-        # Self token merger, mergy surrounding tokens in query tokens
-        output = self.token_merger.bert(
-            query_embeds=self.audio_query_tokens, # [B,64,H]
-            encoder_hidden_states=audio_embed_key_value, # [B,S-64,H]
-            encoder_attention_mask=attn_mask, # [B,S-64,H]
+        latent_audio_embeds = output.last_hidden_state  # B. 32, H
+        latent_attention_score = output.cross_attentions[-1] # [B,nH,32,S], S=128
+        latent_attention_score = latent_attention_score.mean(dim=1) # [B,32,S]
+        latent_embeds = torch.concat([latent_audio_embeds, latent_text_embeds], dim=1) # B, 64, H
+        output = self.token_selection.bert(
+            query_embeds=latent_embeds,  # [B, 64, H]
+            output_attentions=True,
             return_dict=True,
         )
-        B, _, H = fused_embed.size()
-        gate_input = torch.stack([output.last_hidden_state, audio_embed_query], dim=1)
-        gate_input = gate_input.view(-1, H)  # Reshape for the gated network
-        gating_weights = self.gated_network(gate_input).view(B, 2, -1)
-        output.last_hidden_state = gating_weights[:, 0, :, None] * output.last_hidden_state + \
-                       gating_weights[:, 1, :, None] * audio_embed_query
+        fused_embed = output.last_hidden_state # [B, 64, H]
+        attention_score = torch.concat(output.attentions,dim=1) # [[B,nH,S,S], [B,nH,S,S]]
+        audio_attention_score = attention_score[:, :, :self.num_latents, self.num_latents:]  # [B, nH, 32, 32]
+        audio_attention_score = audio_attention_score.mean(dim=1) # [B,32,32]
+        audio_token_importance = torch.matmul(audio_attention_score, latent_attention_score) # [B,32,S]
+        audio_token_importance = audio_token_importance.mean(dim=1) # [B,S}]
+        token_index = torch.topk(audio_token_importance, 64, dim=1)[1]
+        sorted_index = torch.sort(token_index, dim=1)[0]
+        B, S, H = audio_embeds.shape
+        mask = torch.ones(B, S, dtype=torch.bool, device=audio_embeds.device) # 
+        mask[torch.arange(B).unsqueeze(1), sorted_index] = False # for K,V
+        audio_embed_query = audio_embeds[~mask].view(B,-1,H) # top_k token
+        audio_embed_key_value = audio_embeds[mask].view(B,-1,H) # other token
+        audio_embed_key_value = torch.concat([audio_embed_key_value, fused_embed],dim=1) # add latent abstractor
+        output = self.token_merger.bert(
+            query_embeds=audio_embed_query,  # [B, 64, H]
+            encoder_hidden_states=audio_embed_key_value, 
+            encoder_attention_mask=attn_mask, 
+            output_attentions=True,
+            return_dict=True,
+        )
         return output, None
-        # ATC : Audio-Text Contrastive Alignment, add loss as auxilarity loss, no contrastive, SimSiam
-        # labels = torch.arange(audio_embeds.shape[0], device=audio_embeds.device, dtype=torch.long)
-        # #pooled_text_embeds = torch.mean(text_embeds, dim=1)  # B, H
-        # pooled_audio_text_embeds = torch.mean(audio_text_embeds, dim=1)  # B, H
-        # #projected_audio_embeds = self.projection_head(output.last_hidden_state)
-        # #pooled_audio_embeds = torch.mean(projected_audio_embeds, dim=1) # [B.H]
-        # pooled_audio_embeds = torch.mean(output.last_hidden_state, dim=1) # [B.H]
-        # logits_per_audio = pooled_audio_embeds @ pooled_audio_text_embeds.T
-        # logits_per_text = pooled_audio_text_embeds @ pooled_audio_embeds.T 
-        # #cos_sim = F.cosine_similarity(pooled_audio_embeds[None, :], pooled_text_embeds[:, None], dim=-1)
-        # #pos_mask = torch.eye(cos_sim.shape[0], dtype=torch.bool, device=cos_sim.device)
-        # #cos_sim = cos_sim / self.temperature
-        # #nll = -cos_sim[pos_mask]
-        # #loss = nll.mean()
-        # #x = F.normalize(audio_embeds, p=2, dim=-1) # B, S, H
-        # #y = F.normalize(audio_text_embeds, p=2, dim=-1) # B, H, S
-        # #loss = 2 - 2 * (x * y).sum(dim=-1).mean()
-        # total_loss = (
-        #     F.cross_entropy(logits_per_audio, labels) +
-        #     F.cross_entropy(logits_per_text, labels)
-        # ) / 2
-        #return output, total_loss

@@ -222,6 +222,7 @@ class CLAP2LLAMA(nn.Module):
         return output
 
     def forward(self, audio, caption, retr_audios=None, retr_captions=None):
+        encoder_caption = []
         if retr_captions:
             encoder_caption = [' '.join(caption) for caption in zip(*retr_captions)] # B,K to B
         audio_embed, loss = self.forward_encoder(audio, encoder_caption)  # Only for LGTM
@@ -232,8 +233,6 @@ class CLAP2LLAMA(nn.Module):
                 encoder_caption = [' '.join(caption) for caption in zip(*encoder_captions)] # B,K to B
                 #encoder_caption = retr_caption
                 retr_embed, _ = self.forward_encoder(retr_audio, encoder_caption)
-                if self.config.align.model_name == "LGTM": # Should be detached..?
-                    retr_embed = retr_embed.detach()
                 retr_audio_embeds.append(retr_embed)
         output = self.forward_decoder(audio_embed, caption, retr_audio_embeds, retr_captions)
         if loss is not None:
@@ -283,8 +282,6 @@ class CLAP2LLAMA(nn.Module):
             shifted_attn_mask = input_embeds.new_ones((batch_size, seq_length)).long()
             retr_audio_embeds = []
             for i, (retr_audio, retr_caption) in enumerate(zip(retr_audios, retr_captions)): # Only LGTM needs retr_text, others ignore
-                #encoder_captions = retr_captions[:i] + retr_captions[i+1:] # B, K
-                #encoder_caption = [' '.join(caption) for caption in zip(*encoder_captions)] # B,K to B
                 encoder_caption = retr_caption
                 retr_embed, loss = self.forward_encoder(retr_audio, encoder_caption)
                 retr_audio_embeds.append(retr_embed)
@@ -302,12 +299,12 @@ class CLAP2LLAMA(nn.Module):
             outputs = self.decoder.generate(
                 inputs_embeds=input_embeds,
                 attention_mask=shifted_attn_mask,
-                num_beams=2,
+                num_beams=4,
                 min_length=0,
                 max_new_tokens=256,
                 top_p=0.9,
                 do_sample=True,
-                repetition_penalty=1.0,
+                repetition_penalty=1.1,
                 use_cache=True,
                 #generation_config=self.generation_config,
             )
