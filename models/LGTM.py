@@ -1,6 +1,5 @@
-# A.K.A Language Guided Token Merger
-
 import torch
+from copy import deepcopy
 from torch import nn
 import torch.nn.functional as F
 from torch.nn import TransformerDecoderLayer
@@ -27,33 +26,35 @@ class LGTM(nn.Module):
         config.add_cross_attention = True
         config.cross_attention_freq = 1
         config.query_length = num_latents # number of latents
-        self.text_token_merger = BertLMHeadModel(config=config)   # cross-attention with audio token
+        self.text_token_merger = BertLMHeadModel(config=deepcopy(config))   # cross-attention with audio token
         self.text_token_merger.cls = None
         self.text_token_merger.bert.embeddings.word_embeddings = None
         self.text_token_merger.bert.embeddings.position_embeddings = None
         for layer in self.text_token_merger.bert.encoder.layer:
             layer.output = None
             layer.intermediate = None
-        self.audio_token_merger = BertLMHeadModel(config=config)   # cross-attention with latent query audio
+        self.audio_token_merger = BertLMHeadModel(config=deepcopy(config))   # cross-attention with latent query audio
         self.audio_token_merger.cls = None
         self.audio_token_merger.bert.embeddings.word_embeddings = None
         self.audio_token_merger.bert.embeddings.position_embeddings = None
         for layer in self.audio_token_merger.bert.encoder.layer:
             layer.output = None
             layer.intermediate = None
-        self.token_merger = BertLMHeadModel(config=config)   # select token of original modality and map again
-        self.token_merger.cls = None
-        self.token_merger.bert.embeddings.word_embeddings = None
-        self.token_merger.bert.embeddings.position_embeddings = None
-        for layer in self.audio_token_merger.bert.encoder.layer:
-            layer.output = None
-            layer.intermediate = None
         config.add_cross_attention = False
-        self.token_selection = BertLMHeadModel(config=config) # cross-attention with text encoder
+        self.token_selection = BertLMHeadModel(config=deepcopy(config)) # self-attention cross-modality
         self.token_selection.cls = None
         self.token_selection.bert.embeddings.word_embeddings = None
         self.token_selection.bert.embeddings.position_embeddings = None
         for layer in self.token_selection.bert.encoder.layer:
+            layer.output = None
+            layer.intermediate = None
+        config.add_cross_attention = True
+        config.query_length = 64
+        self.token_merger = BertLMHeadModel(config=deepcopy(config))   # select token of original modality and map again
+        self.token_merger.cls = None
+        self.token_merger.bert.embeddings.word_embeddings = None
+        self.token_merger.bert.embeddings.position_embeddings = None
+        for layer in self.audio_token_merger.bert.encoder.layer:
             layer.output = None
             layer.intermediate = None
         self.audio_query_tokens = nn.Parameter(torch.zeros(1, self.num_latents, self.hidden_size))
@@ -115,6 +116,7 @@ class LGTM(nn.Module):
         audio_embed_query = audio_embeds[~mask].view(B,-1,H) # top_k token
         audio_embed_key_value = audio_embeds[mask].view(B,-1,H) # other token
         audio_embed_key_value = torch.concat([audio_embed_key_value, fused_embed],dim=1) # add latent abstractor
+        attn_mask = torch.ones(audio_embed_key_value.size()[:-1], dtype=torch.long).to(audio_embeds.device)
         output = self.token_merger.bert(
             query_embeds=audio_embed_query,  # [B, 64, H]
             encoder_hidden_states=audio_embed_key_value, 
