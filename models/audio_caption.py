@@ -202,7 +202,6 @@ class CLAP2LLAMA(nn.Module):
         shifted_input_ids, shifted_attn_mask = self.shift_and_pad_input(input_ids, attn_mask, audio_embed.shape[1])
         input_embeds, shifted_input_ids, shifted_attn_mask = self.insert_prompt(self.task_prompt, input_embeds, shifted_input_ids, shifted_attn_mask)
         retr_nums = max(len(retr_audio_embeds), len(retr_captions))
-        retr_nums = 0
         for i in range(retr_nums): # Suppose we have only case ([],retr_captions), (retr_audio_embeds,[]), both pair with same length
             if retr_captions: 
                 retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_captions[i], audio_embed.device, add_special_tokens=False)

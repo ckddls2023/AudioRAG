@@ -20,7 +20,7 @@ import evaluate
 from metrics import SpiceMetric, CocoTokenizer, CiderMetric
 
 warnings.simplefilter("ignore", UserWarning)
-ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=False, static_graph=False)
+ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True, static_graph=False)
 accelerator = Accelerator(gradient_accumulation_steps=8, log_with="wandb", kwargs_handlers=[ddp_kwargs], even_batches=True)
 
 

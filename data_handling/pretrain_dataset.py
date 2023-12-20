@@ -105,7 +105,8 @@ class AudioLanguagePretrainDataset(Dataset):
             retrieve_items = self.retrieve_map[wav_path]
             weights = list(range(len(retrieve_items), 0, -1))
             if self.train:
-                selected_items = random.choices(retrieve_items, weights=weights, k=self.top_k)
+                k = random.randint(1, min(self.top_k, len(retrieve_items))) # range (1, top_k)
+                selected_items = random.choices(retrieve_items, weights=weights, k=k)
             else:
                 selected_items = retrieve_items[:self.top_k]
             # for i in range(self.noisy_k): # Add noisy examples

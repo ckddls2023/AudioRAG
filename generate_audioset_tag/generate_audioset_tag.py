@@ -1,4 +1,5 @@
 import json
+import os
 import torch
 import librosa
 import random
@@ -116,6 +117,14 @@ for json_file in json_files:
     for i, entry in enumerate(data["data"]):
         audio_file = entry['audio']
         tags = entry['tag']
+        tags = [tag.strip() for tag in tags_string.split(',')] # Tag is not list
+        # Remove before preprocess
+        for i in range(6):
+            output_file = audio_file.replace(".wav", f"_{i}.wav")
+            if os.path.exists(output_file):
+                os.remove(output_file)
+        if len(tags) <= 1: # Skip if only one tag exists
+            continue
         for j, tag in enumerate(tags):
             output_file = audio_file.replace(".wav", f"_{j}.wav")
             actor = separator_actors[i % num_gpus]

@@ -5,10 +5,10 @@ from openai import OpenAI
 from llama_cpp import Llama
 
 query_json_files = [
+  './data/json_files/AudioSet/val.json',
   './data/json_files/Clotho/val.json',
-  './data/json_files/AudioSet/train.json',
-  #'./data/json_files/AudioSet/val.json',
   './data/json_files/Clotho/train.json',
+  './data/json_files/AudioSet/train.json',
 ]
 
 llm = Llama(model_path="/home/ckddls1321/.cache/checkpoints/solar-10.7b-instruct-v1.0.Q5_K_S.gguf", 
@@ -31,6 +31,7 @@ def remove_parentheses(text):
 
 query_data = []
 for json_file in query_json_files:
+    print(f"Start to process : {json_file}")
     with open(json_file, 'r') as file:
         data = json.load(file)
     for entry in data["data"]:
@@ -43,24 +44,22 @@ for json_file in query_json_files:
             captions = entry["caption"][0]
             
         prompt = f"""
-            Your task is to extract distinct tags from audio caption. 
+            Your task is to extract tags from caption. 
             When extract tag, focus on capturing the essence of each description. 
-            Omit any unnecessary details or ambiguous phrases. 
-            Extract distinct tags from the following audio caption. 
-            Tag should be composed of more than two words. 
-            Answer only one setence of tags with delimeter ','.
+            Omit any unnecessary or ambiguous phrases. 
+            Tag should be more than two words. 
+            Extract tag from the following caption. 
             
+            This is example of caption and tag.
             Caption: 'Birds chirp and a pop occurs before a man speaks' 
             Tags: 'Bird chirp, Man speaks'
-            Caption: 'An engine increases in speed as a horn honks and a man speaks'
-            Tags: 'Engine accelerates, Horn honks, Man speaks'
             Caption: '{captions}'
-            Tags: 
+            Tags:
         """
         
         # Chat Completion API
         # Continue making requests until completion_tokens > 0
-        if isinstance(entry["tag"], list): # Not processed tags
+        if isinstance(entry["tag"], list) or 'extracted tag' in entry['tag']: # Not processed tags only
             completion_tokens = 0
             chat_completion = llm.create_chat_completion(
                 messages = [
@@ -77,12 +76,14 @@ for json_file in query_json_files:
             #     model="gpt-4-0314",
             # )
             completion_tokens = chat_completion['usage']['completion_tokens']
-            if completion_tokens > 0 and completion_tokens < 60:
+            if completion_tokens > 0 and completion_tokens < 40:
                 entry["tag"] = remove_parentheses(chat_completion['choices'][0]['message']['content'].replace("[SOLUTION]","").replace("[SOL]","").replace("Tags: ","").replace(": ",""))
             else:
                 entry["tag"] = ','.join(entry["tag"]) # convert to comma-seperate tag
             llm.reset()
-        print(entry["tag"])
+            print(entry["tag"])
+        else:
+            entry["tag"] = entry["tag"].strip("'").strip().replace(", ",",").replace(" ,","").replace(", ",",")
     # Write the modified data back to the same JSON file
     with open(json_file, 'w') as file:
         json.dump(data, file, indent=4)

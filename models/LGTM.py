@@ -121,7 +121,7 @@ class LGTM(nn.Module):
             query_embeds=audio_embed_query,  # [B, 64, H]
             encoder_hidden_states=audio_embed_key_value, 
             encoder_attention_mask=attn_mask, 
-            output_attentions=True,
+            output_attentions=False,
             return_dict=True,
         )
         return output, None
