@@ -17,7 +17,8 @@ from pipeline import inference
 ray.init()
 
 json_files = [
-  '../data/json_files/AudioSet/val.json',
+  #'../data/json_files/AudioSet/train.json',
+  #'../data/json_files/AudioSet/val.json',
   '../data/json_files/Clotho/train.json',
   '../data/json_files/Clotho/val.json',
 ]
@@ -107,7 +108,6 @@ class AudioSeparator:
 separator_actors = [AudioSeparator.remote("nielsr/audiosep-demo", 'config/audiosep_base.yaml') for _ in range(num_gpus)]
 
 
-json_files = ['../data/json_files/AudioSet/train.json'] + json_files
 for json_file in json_files:
     with open(json_file, 'r') as file:
         data = json.load(file)
@@ -115,19 +115,21 @@ for json_file in json_files:
     # Iterate over each entry and separate audio based on the tag
     separation_refs = []
     for i, entry in enumerate(data["data"]):
+        if i % 20 == 0:
+            print(f"Processing {i} in {json_files}")
         audio_file = entry['audio']
         tags = entry['tag']
-        tags = [tag.strip() for tag in tags_string.split(',')] # Tag is not list
+        tags = [tag.strip() for tag in tags.split(',')] # Tag is not list
         # Remove before preprocess
-        for i in range(6):
-            output_file = audio_file.replace(".wav", f"_{i}.wav")
-            if os.path.exists(output_file):
-                os.remove(output_file)
+        #for i in range(6):
+        #    output_file = audio_file.replace(".wav", f"_{i}.wav")
+        #    if os.path.exists(output_file):
+        #        os.remove(output_file)
         if len(tags) <= 1: # Skip if only one tag exists
             continue
         for j, tag in enumerate(tags):
-            output_file = audio_file.replace(".wav", f"_{j}.wav")
-            actor = separator_actors[i % num_gpus]
+            output_file = audio_file.replace(".wav", f"___{j}.wav")
+            actor = separator_actors[j % num_gpus]
             separation_refs.append(actor.separate.remote(audio_file, tag, output_file))
 
     ray.get(separation_refs)

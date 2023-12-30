@@ -2,10 +2,10 @@ import types
 import librosa
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import PreTrainedModel, PretrainedConfig
 from transformers.modeling_outputs import BaseModelOutput
 from laion_clap import CLAP_Module
-from .htsat import HTSAT_Swin_Transformer
 
 class CLAPEncoderConfig(PretrainedConfig):
     model_type = "audio_encoder"
@@ -15,6 +15,7 @@ class CLAPEncoderConfig(PretrainedConfig):
                  pretrained: bool = True,
                  freeze: bool = True,
                  spec_augment: bool = True,
+                 use_lora: bool = False,
                  audio_args: dict = None,
                  select_feature = "embedding",
                  **kwargs):
@@ -22,6 +23,7 @@ class CLAPEncoderConfig(PretrainedConfig):
         self.model_name = model_name
         self.pretrained = pretrained
         self.freeze = freeze
+        self.use_lora = use_lora
         self.spec_augment = spec_augment
         self.audio_args = audio_args
         self.select_feature = select_feature # fine-grained, embedding, projected
@@ -29,6 +31,40 @@ class CLAPEncoderConfig(PretrainedConfig):
         self.hidden_size = 768
         self.window_size = 4 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
         self.step_size = 4
+
+class LoRA_qkv_Linear(nn.Linear):
+    def __init__(self, in_features, out_features, rank=8, bias=True):
+        # Initialize the base Linear class
+        super(LoRA_qkv_Linear, self).__init__(in_features, out_features*3, bias=bias)
+        self.linear_a_q = nn.Linear(in_features, rank, bias=False)
+        self.linear_b_q = nn.Linear(rank, in_features, bias=False)
+        self.linear_a_v = nn.Linear(in_features, rank, bias=False)
+        self.linear_b_v = nn.Linear(rank, in_features, bias=False)
+        nn.init.zeros_(self.linear_a_q)
+        nn.init.zeros_(self.linear_a_v)
+        nn.init.normal_(self.linear_b_q)
+        nn.init.normal_(self.linear_b_v)
+        self.dropout = nn.Dropout(p=0.05)
+        self.scaling = 16 # lora_alpha
+
+    def forward(self, x):
+        qkv = F.linear(x, self.weight, self.bias)  # B, N, 3*org_C
+        new_q = self.linear_b_q(self.dropout(self.linear_a_q(x))) * self.scaling
+        new_v = self.linear_b_v(self.dropout(self.linear_a_v(x))) * self.scaling
+        qkv[:, :, :self.head_dim] += new_q
+        qkv[:, :, -self.head_dim:] += new_v
+        return qkv
+
+def replace_qkv_with_lora(model, rank):
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear):
+            parent_name, child_name = name.rsplit('.', 1)
+            parent_module = dict(model.named_modules())[parent_name]
+            if child_name == 'qkv':
+                lora_qkv = LoRA_qkv_Linear(module.in_features, module.out_features // 3, rank, bias=True)
+                lora_qkv.weight.data.copy_(module.weight.data)
+                lora_qkv.bias.data.copy_(module.bias.data)
+                setattr(parent_module, child_name, lora_qkv)
 
 class CLAPAudioTower(PreTrainedModel):
     config_class = CLAPEncoderConfig
@@ -39,6 +75,8 @@ class CLAPAudioTower(PreTrainedModel):
         self.clap = CLAP_Module(enable_fusion=True)  # 615M
         if config.pretrained:
             self.clap.load_ckpt()  # download the default pretrained checkpoint.
+        if config.use_lora: # Replace qkv layer with LoRA
+            relpace_qkv_with_lora(self.clap, rank=8)
         def get_audio_embedding_patch(self, data,
                                       select_feature=self.config.select_feature,
                                       window_size=self.config.window_size,
@@ -66,111 +104,3 @@ class CLAPAudioTower(PreTrainedModel):
         if not return_dict:
             return (outputs,)
         return BaseModelOutput(outputs, None, None)
-
-class HTSATEncoderConfig(PretrainedConfig):
-    r"""
-    This is the configuration class to store the configuration of an Audio Encoder. It is used to instantiate an
-    an Audio Encoder according to the specified arguments, defining the model architecture.
-    The audio encoder can be a PANNs model or a HTSAT.
-    """
-    model_type = "audio_encoder"
-
-    def __init__(self,
-                 model_name: str = "HTSATAudioEncoder",
-                 pretrained: bool = True,
-                 freeze: bool = False,
-                 spec_augment: bool = True,
-                 audio_args: dict = None,
-                 **kwargs):
-        super(HTSATEncoderConfig, self).__init__(**kwargs)
-        self.model_name = model_name
-        self.pretrained = pretrained
-        self.freeze = freeze
-        self.hidden_size = 768
-        self.spec_augment = spec_augment
-        self.audio_args = audio_args
-        self.num_labels = 0
-        self.sr = 32000
-        self.n_fft = 1024
-        self.hop_length = 320
-        self.f_min = 50
-        self.f_max = 14000
-        self.n_mels = 64
-        self.max_length = 10
-        self.mono = True
-
-
-class HTSATAudioTower(PreTrainedModel):
-    config_class = HTSATEncoderConfig
-
-    def __init__(self, config):
-        super(HTSATAudioTower, self).__init__(config)
-
-        self.audio_enc = HTSAT_Swin_Transformer(
-            spec_size=256,
-            patch_size=4,
-            patch_stride=(4, 4),
-            num_classes=527,
-            embed_dim=96,
-            depths=[2, 2, 6, 2],
-            num_heads=[4, 8, 16, 32],
-            window_size=8,
-            config=config
-        )
-        if config.pretrained:
-            audio_ckpt = torch.load("pretrained_models/audio_encoder/HTSAT.ckpt", map_location="cpu")["state_dict"]
-            for key in list(audio_ckpt.keys()):
-                if key.startswith('sed_model') and (
-                        'spectrogram_extractor' not in key and 'logmel_extractor' not in key):
-                    v = audio_ckpt.pop(key)
-                    audio_ckpt[key[10:]] = v
-            self.audio_enc.load_state_dict(audio_ckpt, strict=False)
-        self.audio_width = 768
-
-        if config.freeze:
-            for name, param in self.audio_enc.named_parameters():
-                if "fc1" not in name:
-                    param.requires_grad = False
-
-    def forward(self, input_ids,
-                output_attentions=False,
-                output_hidden_states=False,
-                return_dict=True
-                ):
-        audio_embeds = self.audio_enc(input_ids)
-        if not return_dict:
-            return (audio_embeds,)
-        return BaseModelOutput(audio_embeds, None, None)
-
-
-if __name__ == "__main__":
-    # SR(32000) * 10 => is_longer
-    audio_data, _ = librosa.load('../examples/yapping-dog.wav', sr=48000)  # sample rate should be 48000
-    audio_data = audio_data.reshape(1, -1)  # Make it (1,T) or (N,T)
-    # When using huggingface
-    # processor = AutoProcessor.from_pretrained("laion/clap-htsat-fused")
-    # inputs = processor(audios=audio_data, return_tensors="pt")
-    # # print(inputs["input_features"].shape) #([1, 4, 1001, 64]))
-    # model = CLAPAudioTower(audio_tower="laion/clap-htsat-fused")
-    # print(model)
-    # print(model(**inputs).shape)
-
-    config = HTSATEncoderConfig(pretrained=False)
-    model = HTSATAudioTower(config)
-    # # Extract audio embeddings
-    # audio_data input format : (1, T), (N,T)
-    a = torch.randn(1, 32000)
-    output_dict = model(a)
-    print(output_dict.last_hidden_state.shape) # 1, 1024, 768
-    # output_dict = model(torch.from_numpy(audio_data)) # Out of Time, Only less then 10s is possible(Dataset will support)
-    # print(output_dict.last_hidden_state.shape)  # OOT
-
-    config = CLAPEncoderConfig(pretrained=False)
-    model = CLAPAudioTower(config)
-    output_dict = model(a)
-    print(output_dict.last_hidden_state.shape) # 1, 768
-    output_dict = model(torch.from_numpy(audio_data)) # Out of Time, Only less then 10s is possible(Dataset will support)
-    print(output_dict.last_hidden_state.shape)  # 1, 768
-
-    # TODO : We can use Whisper to additionally enable speech encoder.
-    # TODO : We can use Beats to additionally enable speech encoder.

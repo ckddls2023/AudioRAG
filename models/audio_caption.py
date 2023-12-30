@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, LlamaForCausalLM, LlamaTokenizer, GPT2Config, LlamaConfig, GenerationConfig
 from peft import LoraConfig, TaskType, IA3Config, get_peft_model, get_peft_model_state_dict, PeftModel, PeftConfig, PromptEncoderConfig, AdaptionPromptConfig
-from models.audio_encoder import CLAPAudioTower, CLAPEncoderConfig, HTSATAudioTower, HTSATEncoderConfig
+from models.audio_encoder import CLAPAudioTower, CLAPEncoderConfig
 from models.flamingo_pytorch import PerceiverResampler
 from models.Qformer import *
 from models.LGTM import *
@@ -23,18 +23,34 @@ class CLAP2LLAMA(nn.Module):
         self.encoder = CLAPAudioTower(self.encoder_config)
         self.decoder = LlamaForCausalLM.from_pretrained("lmsys/vicuna-7b-v1.5")  # v1.5 : LLAMA2 + VICUNA
         self.tokenizer = LlamaTokenizer.from_pretrained("lmsys/vicuna-7b-v1.5", use_fast=False, add_eos_token=True,add_bos_token=False)
-        #self.tokenizer.pad_token_id = 0  # unk. we want this to be different from the eos token
         self.generation_config, unused_kwargs = GenerationConfig.from_pretrained("lmsys/vicuna-7b-v1.5", max_new_tokens=200, return_unused_kwargs=True)
-        self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-        self.decoder.resize_token_embeddings(len(self.tokenizer))
+        self.use_aud_start_end = config.use_aud_start_end
+        self.use_fuse = config.use_fuse
+        #self.tokenizer.pad_token_id = 0  # unk. we want this to be different from the eos token
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.unk_token
+            self.decoder.config.pad_token_id = self.decoder.config.unk_token_id
+        additional_special_tokens = []
+        if self.use_fuse:
+            additional_special_tokens += ['<Fus>']
+        num_new_tokens = self.tokenizer.add_special_tokens(
+            {   
+                "additional_special_tokens": additional_special_tokens
+            }
+        )
+        if num_new_tokens > 0:
+            self.decoder.resize_token_embeddings(len(self.tokenizer))
+            input_embeddings = self.decoder.get_input_embeddings().weight.data
+            output_embeddings = self.decoder.get_output_embeddings().weight.data
+            input_embeddings_avg = input_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
+            output_embeddings_avg = output_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
+            input_embeddings[-num_new_tokens:] = input_embeddings_avg
+            output_embeddings[-num_new_tokens:] = output_embeddings_avg
         self.decoder.config.pad_token_id = self.tokenizer.pad_token_id
         self.tokenizer.padding_side = "right"
         self.tokenizer.model_max_length = 256
         self.retr_prompt = config.retr_prompt
         self.task_prompt = config.task_prompt
-        #if self.tokenizer.pad_token is None:
-        #    self.tokenizer.pad_token = self.tokenizer.eos_token
-        #    self.decoder.config.pad_token_id = self.decoder.config.eos_token_id
         self.decoder_config = self.decoder.config
         
         if self.config.align.model_name == "MLP":
@@ -73,6 +89,7 @@ class CLAP2LLAMA(nn.Module):
             enc_to_dec_proj_config.query_length = 64 # number of latents
             self.audio_query_tokens = nn.Parameter(torch.zeros(1, 64, enc_to_dec_proj_config.hidden_size))
             self.audio_query_tokens.data.normal_(mean=0.0, std=enc_to_dec_proj_config.initializer_range)
+            self.enc_to_dec_proj = BertLMHeadModel(config=enc_to_dec_proj_config)   # cross-attention with audio token
             self.enc_to_dec_proj.cls = None
             self.enc_to_dec_proj.bert.embeddings.word_embeddings = None
             self.enc_to_dec_proj.bert.embeddings.position_embeddings = None
@@ -96,6 +113,7 @@ class CLAP2LLAMA(nn.Module):
         self.freeze_am = config.freeze_am
         self.unfreeze_am = config.unfreeze_am
         self.freeze_lm = config.freeze_lm
+        self.freeze_align = config.freeze_align
 
         # Freeze all CLAP parameters
         self.decoder.gradient_checkpointing_enable()
@@ -106,8 +124,12 @@ class CLAP2LLAMA(nn.Module):
                     p.requires_grad = True
             
         # Freeze all alignment paramters
-        # for param in self.enc_to_dec_proj.parameters():
-        #     param.requires_grad = False
+        if self.freeze_align:
+            for param in self.enc_to_dec_proj.parameters():
+                param.requires_grad = False
+            if self.config.align.model_name == "LGTM" or self.config.align.model_name == "Qformer":
+                for param in self.decoder_proj.parameters():
+                    param.requires_grad = False
 
         # Freeze all LM parameters
         if self.freeze_lm:
@@ -120,14 +142,16 @@ class CLAP2LLAMA(nn.Module):
                 self.peft_config = LoraConfig(**config.peft_config)
             if peft_type == "IA3":
                 self.peft_config = IA3Config(**config.peft_config)
-            if peft_type == "PTUNING":
+                self.decoder.model.embed_tokens.weight.requires_grad = False
+                #self.decoder.lm_head.weight.requires_grad = False # slightly finetune lm_head
+            if peft_type == "PTUNING": 
                 self.peft_config = PromptEncoderConfig(**config.peft_config)
             if peft_type == "LLAMA-ADAPTER":
                 self.peft_config = AdaptionPromptConfig(**config.peft_config)
             self.decoder = get_peft_model(self.decoder, self.peft_config)
             if peft_type == "LORA":
                 self.decoder.base_model.model.model.embed_tokens.original_module.weight.requires_grad = False
-                self.decoder.base_model.model.lm_head.original_module.weight.requires_grad = False
+                #self.decoder.base_model.model.lm_head.original_module.weight.requires_grad = False # slightly finetune lm_head
             self.decoder.print_trainable_parameters()
 
 
@@ -215,12 +239,16 @@ class CLAP2LLAMA(nn.Module):
                 retr_input_ids = input_ids.new_zeros(input_ids.shape[0],retr_audio_embeds[i].shape[1]) # B, prefix_length
                 retr_input_ids[:,:] = -100 # Ignore all embeds
                 shifted_input_ids = torch.cat((retr_input_ids, shifted_input_ids), dim=1)
-                shifted_attn_mask = torch.cat((shifted_attn_mask.new_ones(retr_audio_embeds[i].size()[:2]), shifted_attn_mask), dim=1)
+                shifted_attn_mask = torch.cat([shifted_attn_mask.new_ones(retr_audio_embeds[i].size()[:2]), shifted_attn_mask], dim=1)
         input_embeds, shifted_input_ids, shifted_attn_mask = self.insert_prompt(self.retr_prompt, input_embeds, shifted_input_ids, shifted_attn_mask)
         output = self.decoder(inputs_embeds=input_embeds, labels=shifted_input_ids, attention_mask=shifted_attn_mask)
         return output
 
     def forward(self, audio, caption, retr_audios=None, retr_captions=None):
+        if self.use_fuse: # Add special token Fus that indicate longer than 10s
+            caption = ['<Fus>' + elem if audio[i]["longer"] else elem for i, elem in enumerate(caption)]
+            for retr_audio, retr_caption in zip(retr_audios, retr_captions):
+                retr_caption = ['<Fus>' + elem if retr_audio[i]["longer"] else elem for i, elem in enumerate(caption)]
         encoder_caption = []
         if retr_captions:
             encoder_caption = [' '.join(caption) for caption in zip(*retr_captions)] # B,K to B
@@ -228,11 +256,8 @@ class CLAP2LLAMA(nn.Module):
         retr_audio_embeds = []
         if retr_audios:
             for i, (retr_audio, retr_caption) in enumerate(zip(retr_audios, retr_captions)):
-                encoder_captions = retr_captions[:i] + retr_captions[i+1:] # B, K
-                encoder_caption = [' '.join(caption) for caption in zip(*encoder_captions)] # B,K to B
-                #encoder_caption = retr_caption
-                retr_embed, _ = self.forward_encoder(retr_audio, encoder_caption)
-                retr_audio_embeds.append(retr_embed)
+                retr_embed, _ = self.forward_encoder(retr_audio, retr_caption)
+                retr_audio_embeds.append(retr_embed.detach())
         output = self.forward_decoder(audio_embed, caption, retr_audio_embeds, retr_captions)
         if loss is not None:
             output["loss"] += output["loss"] + 0.1 * loss
@@ -241,14 +266,14 @@ class CLAP2LLAMA(nn.Module):
     def save_ckpt(self, checkpoint_path):
         if not os.path.exists(checkpoint_path):
             os.makedirs(checkpoint_path, exist_ok=True)
-        if self.config.align.model_name == "MLP" or self.config.align.model_name == "Perceiver":
-            torch.save(self.enc_to_dec_proj.state_dict(), checkpoint_path + "enc_to_dec_proj.bin")
-        if self.config.align.model_name == "Qformer" or self.config.align.model_name == "LGTM":
-            torch.save(self.decoder_proj.state_dict(), checkpoint_path + "decoder_proj.bin")
         if self.config.align.model_name == "LGTM":
             full_state_dict = self.enc_to_dec_proj.state_dict()
             filtered_state_dict = {k: v for k, v in full_state_dict.items() if 'text_encoder' not in k}
             torch.save(filtered_state_dict, checkpoint_path + "enc_to_dec_proj.bin")
+        else:
+            torch.save(self.enc_to_dec_proj.state_dict(), checkpoint_path + "enc_to_dec_proj.bin")
+        if self.config.align.model_name == "Qformer" or self.config.align.model_name == "LGTM":
+            torch.save(self.decoder_proj.state_dict(), checkpoint_path + "decoder_proj.bin")
         if self.unfreeze_am:
             torch.save(self.encoder.state_dict(), checkpoint_path + "audio_encoder.bin")
         if not self.freeze_lm:
@@ -256,12 +281,9 @@ class CLAP2LLAMA(nn.Module):
 
     def load_ckpt(self, checkpoint_path):
         print("Load model from checkpoint")
-        if self.config.align.model_name == "MLP" or self.config.align.model_name == "Perceiver":
-            self.enc_to_dec_proj.load_state_dict(torch.load(checkpoint_path + "enc_to_dec_proj.bin"), strict=True)
+        self.enc_to_dec_proj.load_state_dict(torch.load(checkpoint_path + "enc_to_dec_proj.bin"), strict=False)
         if self.config.align.model_name == "Qformer" or self.config.align.model_name == "LGTM":
             self.decoder_proj.load_state_dict(torch.load(checkpoint_path + "decoder_proj.bin"), strict = True)
-        if self.config.align.model_name == "LGTM":
-            self.enc_to_dec_proj.load_state_dict(torch.load(checkpoint_path+"enc_to_dec_proj.bin"), strict=False)
         if self.unfreeze_am:
             file_path = os.path.join(checkpoint_path, "audio_encoder.bin")
             if os.path.exists(file_path):
@@ -279,10 +301,12 @@ class CLAP2LLAMA(nn.Module):
             input_embeds, loss = self.forward_encoder(audio, encoder_caption) # Only for LGTM, dict type will be better...
             batch_size, seq_length, _ = input_embeds.shape
             shifted_attn_mask = input_embeds.new_ones((batch_size, seq_length)).long()
+            if self.use_fuse: # Add special token Fus that indicate longer than 10s
+                # TODO : add Fus when generate caption for test
+                pass
             retr_audio_embeds = []
             for i, (retr_audio, retr_caption) in enumerate(zip(retr_audios, retr_captions)): # Only LGTM needs retr_text, others ignore
-                encoder_caption = retr_caption
-                retr_embed, loss = self.forward_encoder(retr_audio, encoder_caption)
+                retr_embed, loss = self.forward_encoder(retr_audio, retr_caption)
                 retr_audio_embeds.append(retr_embed)
             retr_nums = max(len(retr_audio_embeds), len(retr_captions))
             for i in range(retr_nums): # Suppose we have only case ([],retr_captions), (retr_audio_embeds,[]), both pair with same length
@@ -299,11 +323,11 @@ class CLAP2LLAMA(nn.Module):
                 inputs_embeds=input_embeds,
                 attention_mask=shifted_attn_mask,
                 num_beams=4,
-                min_length=0,
                 max_new_tokens=256,
+                min_length=0,
                 top_p=0.9,
                 do_sample=True,
-                repetition_penalty=1.1,
+                repetition_penalty=1.0,
                 use_cache=True,
                 #generation_config=self.generation_config,
             )

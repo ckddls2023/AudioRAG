@@ -20,7 +20,7 @@ import evaluate
 from metrics import SpiceMetric, CocoTokenizer, CiderMetric
 
 warnings.simplefilter("ignore", UserWarning)
-ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True, static_graph=False)
+ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=False, static_graph=False)
 accelerator = Accelerator(gradient_accumulation_steps=8, log_with="wandb", kwargs_handlers=[ddp_kwargs], even_batches=True)
 
 
@@ -73,16 +73,13 @@ def validate(data_loader, model, epoch):
     ref_captions = []
     for i, batch_data in tqdm(enumerate(data_loader), total=len(data_loader)):
         audio, caption, audio_names, retr_audios, retr_captions = batch_data
-        if not retr_captions: # If retrieved results is missing, num_captions = 5, choose 1
-            retr_captions = [[texts[0] for texts in caption]]
         with accelerator.autocast():
             gen_caption = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_captions=retr_captions)
-            print(gen_caption)
-            print(caption)
+            accelerator.print(gen_caption)
+            accelerator.print(caption)
             gen_captions.extend(gen_caption)
             ref_captions.extend(caption)
     if accelerator.is_main_process:
-        sacrebleu_score = sacrebleu.compute(predictions=gen_captions, references=ref_captions)
         meteor_score = meteor.compute(predictions=gen_captions, references=ref_captions)
         tokenizer = CocoTokenizer(gen_captions, ref_captions)
         tokens = tokenizer.tokenize()
@@ -93,13 +90,15 @@ def validate(data_loader, model, epoch):
         rouge_score = rouge.compute(predictions=gen_captions, references=ref_captions)
         spider_score = 0.5 * (spice_score['average_score'] + cider_score['score'])
         metrics_all = {
-            "sacrebleu": sacrebleu_score['score'],
             "meteor": meteor_score['meteor'],
             "spice": spice_score['average_score'],
             "cider": cider_score['score'],
             "rougeL": rouge_score['rougeL'],
             "spider": spider_score,
         }
+        if all(len(caption) == len(ref_captions[0]) for caption in ref_captions): # All have same length, so we can compute average score
+            sacrebleu_score = sacrebleu.compute(predictions=gen_captions, references=ref_captions)
+            metrics_all["sacrebleu"] = sacrebleu_score['score']
         accelerator.print(metrics_all)
         accelerator.log(metrics_all)
         return metrics_all

@@ -101,12 +101,11 @@ class AudioLanguagePretrainDataset(Dataset):
         caption = text_preprocess(caption)
         retr_audio_features = []
         retr_captions = []
-        if wav_path in self.retrieve_map and self.top_k > 0:
+        if wav_path in self.retrieve_map and self.top_k > 0 and len(self.retrieve_map[wav_path]) > self.top_k:
             retrieve_items = self.retrieve_map[wav_path]
             weights = list(range(len(retrieve_items), 0, -1))
             if self.train:
-                k = random.randint(1, min(self.top_k, len(retrieve_items))) # range (1, top_k)
-                selected_items = random.choices(retrieve_items, weights=weights, k=k)
+                selected_items = random.choices(retrieve_items, weights=weights, k=self.top_k)
             else:
                 selected_items = retrieve_items[:self.top_k]
             # for i in range(self.noisy_k): # Add noisy examples
