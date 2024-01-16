@@ -52,9 +52,9 @@ class align2text(nn.Module):
             averaged_cls_attn = grouped_cls_attn.mean(dim=2)  # [B,2,64]
             #averaged_cls_attn = averaged_cls_attn[:,0,:]
             if lm_attn is not None:
-                lm_attn = F.normalize(lm_attn, p=2, dim=-1)
-                cls_attn_log = F.log_softmax(averaged_cls_attn, dim=-1) # B, nH
-                kl_loss = F.kl_div(cls_attn_log, lm_attn, reduction='batchmean')  # or 'sum', 'mean', or 'none'
+                lm_attn = F.normalize(lm_attn, p=2, dim=-1) # since it's softmax score
+                cls_attn_log = F.log_softmax(averaged_cls_attn, dim=-1) # B,nH,S
+                kl_loss = F.kl_div(cls_attn_log, lm_attn, reduction='mean')  # or 'sum', 'mean', or 'none'
             
             # BYOL loss style
             # z_audio = F.normalize(audio_features, dim=1)
@@ -82,8 +82,8 @@ class align2text(nn.Module):
                 F.cross_entropy(logits_per_audio, labels) +
                 F.cross_entropy(logits_per_text, labels)
             ) / 2
-            # if lm_attn is not None:
-            #     total_loss += 0.00001 * kl_loss
+            if lm_attn is not None:
+                total_loss += 0.0001 * kl_loss
             return {
                 "loss": total_loss
             }
