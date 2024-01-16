@@ -75,16 +75,20 @@ def validate(data_loader, model, epoch):
         audio, caption, audio_names, retr_audios, retr_captions = batch_data
         with accelerator.autocast():
             gen_caption = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_captions=retr_captions)
+            if "creating" in gen_caption[0]:
+                index = gen_caption[0].index("creating")
+                gen_caption[0] = gen_caption[0][:index]
+            accelerator.print(retr_captions)
             accelerator.print(gen_caption)
             accelerator.print(caption)
             gen_captions.extend(gen_caption)
             ref_captions.extend(caption)
     if accelerator.is_main_process:
         meteor_score = meteor.compute(predictions=gen_captions, references=ref_captions)
-        tokenizer = CocoTokenizer(gen_captions, ref_captions)
-        tokens = tokenizer.tokenize()
         if isinstance(ref_captions, list) and all(isinstance(caption, str) for caption in ref_captions):
             ref_captions = [[caption] for caption in ref_captions] # List of list, val or test may include 5 captions
+        tokenizer = CocoTokenizer(gen_captions, ref_captions)
+        tokens = tokenizer.tokenize()
         spice_score = spice.compute(predictions=gen_captions, references=ref_captions, tokens=tokens)
         cider_score = cider.compute(predictions=gen_captions, references=ref_captions, tokens=tokens)
         rouge_score = rouge.compute(predictions=gen_captions, references=ref_captions)
@@ -107,6 +111,7 @@ def validate(data_loader, model, epoch):
 
 
 def main():
+    # torch.autograd.set_detect_anomaly(True)
     config = get_config()
     setup_seed(config.seed)
     exp_name = config.exp_name + "_" + config.model_args.align.model_name + f"_lr_{config.optim_args.lr}_seed_{config.seed}"

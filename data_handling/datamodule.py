@@ -7,6 +7,7 @@
 import torch
 from torch import Tensor
 from typing import Optional, List, Tuple
+import numpy as np
 from torch.nn.utils.rnn import pad_sequence
 # from pytorch_lightning import LightningDataModule
 from data_handling.caption_dataset import AudioCaptionDataset
@@ -100,11 +101,13 @@ class AudioCaptionDataModule:
 
 
 def collate_fn(batch):
-    audio_features, captions, audio_paths, retr_audio_features, retr_captions = zip(*batch)
+    audio_features, captions, audio_paths, retr_audio_features, retr_captions, embeddings = zip(*batch)
     if retr_audio_features[0]:
         retr_audio_features = list(map(list, zip(*retr_audio_features))) # B, top_k to top_k, B
         retr_captions = list(map(list, zip(*retr_captions)))
     else:
         retr_audio_features = []
         retr_captions = []
-    return audio_features, captions, audio_paths, retr_audio_features, retr_captions
+    embeddings = np.stack(embeddings)
+    embeddings = torch.from_numpy(embeddings)
+    return audio_features, captions, audio_paths, retr_audio_features, retr_captions, embeddings

@@ -1,31 +1,37 @@
 exp_name: 'train'
-seed: 20
+seed: 1234
 
 train_jsons: [
-  'data/json_files/AudioSet/train.json',
+  'data/json_files/AudioSet/train.json', # 48K
+  'data/json_files/Clotho/train.json', # 6K
   'data/json_files/Clotho/train.json',
   'data/json_files/Clotho/train.json',
-  'data/json_files/Clotho/train.json',
+  #"data/json_files/Auto_ACD/train.json",
 ]
 val_jsons: [
-  "data/json_files/AudioSet/val.json",
-  #"data/json_files/Clotho/val.json",
+  # "data/json_files/AudioSet/val.json",
+  "data/json_files/Clotho/val.json",
   #"data/json_files/MACS/val.json",
+  #"data/json_files/Auto_ACD/val.json",
 ]
 blacklist: ""
 # dataset == 'AudioCaps': sampling_rate = 32000
 # dataset == 'Clotho': sampling_rate = 44100
 # 48000 for CLAP
 # 32000 for HTSAT
+
 audio_args:
-  sr: 48000
-  n_fft: 1024
-  hop_length: 320
-  f_min: 50
-  f_max: 14000
-  n_mels: 64
-  max_length: 10
-  mono: True
+  audio_length: 1024
+  clip_samples: 480000
+  mel_bins: 64
+  sample_rate: 48000
+  window_size: 1024
+  hop_size: 480
+  fmin: 50
+  fmax: 14000
+  class_num: 527
+  model_type: "HTSAT"
+  model_name": "base"
 
 data_args:
   dataset: "Clotho"
@@ -33,45 +39,58 @@ data_args:
   batch_size: 4
   num_workers: 16
 
+
 model_args:
   name: "CLAP2LLAMA"
-  use_aud_start_end: False
-  use_fuse: True
   retr_prompt: ""
   task_prompt: ""
+  caption_prompt : ""
+  #retr_prompt: 'Here are might be similar audio and caption pairs.'
+  # retr_prompt: ''
+  #retr_prompt: "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\nUSER: "
+  #task_prompt: 'Describe this Audio briefly.'
+  #task_prompt: "Briefly describe this Audio. Answer simple, short. Audio: "
+  #caption_prompt : ""
   freeze_am: True
-  #unfreeze_am: ['model.audio_branch.layers.3.blocks.1']
-  #unfreeze_am: ['lora_qkv']
-  unfreeze_am: []
+  # unfreeze_am: []
+  unfreeze_am: ["linear_a_q","linear_b_q","linear_a_v","linear_b_v"]
   freeze_lm: False
   freeze_align: False
-  #checkpoint_path: "./finetuned_models/audio2audio_LGTM3/"
-  #checkpoint_path: "./finetuned_models/audio2audio_LGTM2/"
-  #checkpoint_path: "./finetuned_models/audio2audio_LGTM/"
-  #checkpoint_path: "./finetuned_models/audio2audio_MLP/"
-  #checkpoint_path: "./finetuned_models/audio2audio_MLP_20epoch/"
+  #checkpoint_path: "./finetuned_models/audio2audio_MLP/" # 32, 16
+  checkpoint_path: "./finetuned_models/audio2audio_MLP_20epoch/"
   #checkpoint_path: "./finetuned_models/frame2audio_MLP/"
   #checkpoint_path: "./finetuned_models/finetuned_MLP_IA3/"
+  #checkpoint_path: "./finetuned_models/audio2audio_MLP_audiocaps_only/"
   #checkpoint_path: "./finetuned_models/audio2text_MLP/"
   #checkpoint_path: "./finetuned_models/textonly_MLP/"
   #checkpoint_path: "./finetuned_models/finetuned_MLP/"
+  #checkpoint_path: "./finetuned_models/audio2audio_MLP_clotho_only/"
+  #checkpoint_path: "./finetuned_models/audio2audio_MLP_audiocaps_only/"
+  #checkpoint_path: "./finetuned_models/finetuned_MLP_fuse/"
+  #checkpoint_path: "./finetuned_models/finetuned_Perceiver/"
+  #checkpoint_path: "./finetuned_models/finetuned_Qformer/"
   #checkpoint_path: "./finetuned_models/finetuned_MLP_clotho9x/"
   #checkpoint_path: "./finetuned_models/finetuned_MLP_clotho9x_audiosep/"
   #checkpoint_path: "./finetuned_models/finetuned_MLP_clotho9x_audiosep2/"
-  #checkpoint_path: "./finetuned_models/finetuned_LGTM/"
-  checkpoint_path: "./pretrained_models/pretrained_MLP/" # 32, 16
-  #checkpoint_path: "./pretrained_models/pretrained_Perceiver/" # 32, 16
-  #checkpoint_path: "./pretrained_models/pretrained_LGTM/" # 8, 8
+  #checkpoint_path: "./finetuned_models/finetuned_MLP_AutoACD_5epoch/" # 16, 16
+  #checkpoint_path: "./finetuned_models/finetuned_MLP_AutoACD_6epoch_IA3_unfuse/"
+  #checkpoint_path: "./finetuned_models/finetuned_MLP_lora_frozen/" # 16, 16
+  #checkpoint_path: "./pretrained_models/pretrained_MLP/" # 32, 16
+  #checkpoint_path: "./pretrained_models/pretrained_MLP_clap_lora_AutoACD/" # 16, 16
+  #checkpoint_path: "./pretrained_models/pretrained_MLP_clap_lora/" # 16, 16
+  #checkpoint_path: "./pretrained_models/pretrained_Perceiver/" # 4, 4
+  #checkpoint_path: "./pretrained_models/pretrained_Qformer/" # 4, 4
   #checkpoint_path: "./pretrained_models/pretrained_MLP_15epoch_w16_s16/" # 16, 16
   encoder:
     model_name: "CLAPAudioEncoder"
     pretrained: True
     freeze: True
+    use_lora: True
     spec_augment: True
     select_feature: "fine_grained_embedding"
     sequence_length: 1024
     hidden_size: 768
-    window_size: 32 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
+    window_size: 16 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
     step_size: 16
   align:
     model_name: "MLP"
@@ -86,12 +105,12 @@ model_args:
   #   target_modules: ["q_proj", "v_proj", "k_proj","o_proj"]
   #   target_modules: ["q_proj", "v_proj", "k_proj","o_proj","lm_head","embed_tokens"]
   peft_config:
-    type: "IA3"
-    peft_type: "IA3"
-    task_type: "CAUSAL_LM"
-    modules_to_save: ['lm_head']
-    target_modules: ["q_proj", "v_proj", "down_proj"]
-    feedforward_modules: ["down_proj"]
+   type: "IA3"
+   peft_type: "IA3"
+   task_type: "CAUSAL_LM"
+   target_modules: ["q_proj", "v_proj", "down_proj"]
+   feedforward_modules: ["down_proj"]
+   modules_to_save: ["lm_head","embed_tokens"]
   #peft_config:
   #    type: "PTUNING"
   #    task_type: "CAUSAL_LM"
@@ -107,7 +126,7 @@ model_args:
 
 # lr from wavcaps, linear scale lr
 optim_args:
-  lr: 1e-4
+  lr: 1e-5
   betas: [0.9, 0.99]
   eps: 1e-8
   momentum: 0.9
@@ -115,11 +134,11 @@ optim_args:
   weight_decay: 0.01
 
 training:
-  warmup_epochs: 2
+  warmup_epochs: 1
   epochs: 10
   clip_grad: 2
-  output_path: "./finetuned_models/finetuned_MLP_fuse/"
-  eval: False
+  output_path: "./finetuned_models/finetuned_MLP_AutoACD_6epoch_IA3/"
+  eval: True
   validate: False
   
 index_args:
@@ -128,11 +147,11 @@ index_args:
   #index_path: "./data/index/final_index_big_kb/frame2frame_val.json"
   #index_path: "./data/index/final_index_big_kb/audio2text_train.json"
   #index_path: "./data/index/final_index_big_kb/audio2text_val.json"
-  index_path: "./data/index/final_index_big_kb/audio2audio_train.json"
+  #index_path: "./data/index/final_index_big_kb/audio2audio_train.json"
   #index_path: "./data/index/final_index_big_kb/audio2audio_val.json"
   #index_path: "./data/index/final_index_big_kb_clotho/audio2audio_val.json"
   #index_path: "./data/index/final_index_big_kb_clotho/audio2text_val.json"
-  #index_path: "./data/index/final_index_big_kb_clotho/frame2frame_val.json"
+  #index_path: "./data/index/final_index_QclothoFrame_KBbig/frame2audio_val.json"
   #index_path: "./data/index/final_index_big_kb_macs/audio2audio_val.json"
   #index_path: "./data/index/final_index_big_kb_macs/audio2text_val.json"
   #index_path: "./data/index/final_index_big_kb_macs/frame2frame_val.json"
@@ -140,4 +159,15 @@ index_args:
   #index_path: "./data/index/final_index_big_kb_sep_audiocaps/audio2audio_val_sep.json"
   #index_path: "./data/index/final_index_big_kb_sep_audiocaps_noisy_version/audio2audio_train_sep.json"
   #index_path: "./data/index/final_index_big_kb_sep_audiocaps_noisy_version/audio2audio_val_sep.json"
+  #index_path: "./data/index/final_index_only_audiocaps/audio2audio_val.json"
+  #index_path: "./data/index/final_index_only_clotho/audio2audio_val.json"
+  index_path: "./data/index/final_index_Qclotho_KBbigMixed/audio2mixed_val.json"
+  #index_path: "./data/index/audiocaps_clotho_sentence_embed.json"
+  #index_path: "./data/index/AutoACD_macs_sentence_embed.json"
+  #index_path: "./data/index/final_index_QcapsVal_KBacdTrain/audio2audio_val.json"
+  #index_path: "./data/index/final_index_QcapsVal_KBacdTrain/audio2text_val.json"
+  #index_path: "./data/index/final_index_QclothoVal_KBacdTrain/audio2audio_val.json"
+  #index_path: "./data/index/final_index_QclothoVal_KBacdTrain/audio2text_val.json"
+  #index_path: "./data/index/final_index_QacdVal_KBacdTrain/audio2audio_val.json"
+  #index_path: "./data/index/final_index_QacdVal_KBacdTrain/audio2text_val.json"
   top_k: 2

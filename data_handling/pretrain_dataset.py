@@ -8,7 +8,9 @@ import json
 import random
 import librosa
 import torch
-import ruamel.yaml as yaml
+import os
+import numpy as np
+from omegaconf import OmegaConf
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from data_handling.datamodule import collate_fn
 from data_handling.sampler import BySequenceLengthSampler, BySequenceBatchSampler
@@ -23,16 +25,18 @@ def load_json_file(files, blacklist=None, train=True):
         with open(blacklist, 'r') as f:
             blacklist = json.load(f)
     for file in files:
+        parent_path = os.path.basename(os.path.dirname(file))  # Extracts the parent directory name
         with open(file, "r") as f:
             json_obj = json.load(f)
-            for item in json_obj["data"]:
+            for i, item in enumerate(json_obj["data"][:600000]):
+                item["embedding_path"] = f"./data/embeddings/{parent_path}/{i:07d}.npy"
                 if "FreeSound" in file and blacklist:
                     if item["id"] in blacklist["FreeSound"]:
                         continue
                 elif "AudioSet" in file and blacklist:
                     if item["id"] in blacklist["AudioSet"]:
                         continue
-                if item["duration"] > 40.0:  # Avoid too much long audios
+                if item["duration"] > 40.0 or item["duration"] < 5.0:  # Avoid too much short or long audios
                     continue
                 json_data.append(item)
                 audio_id += 1
@@ -53,55 +57,58 @@ class AudioLanguagePretrainDataset(Dataset):
             with open(retrieve_map, 'r') as file:
                 self.retrieve_map = json.load(file)
 
-        self.sr = audio_config["sr"]
-        if audio_config["max_length"] != 0:
-            self.max_length = audio_config["max_length"] * self.sr
-        else:
-            self.max_length = 0
+        self.audio_cfg = OmegaConf.to_container(audio_config, resolve=True)
+        self.sr = self.audio_cfg["sample_rate"]
             
-        self.audio_cfg = {
-            "audio_length": 1024,
-            "clip_samples": 480000,
-            "mel_bins": 64,
-            "sample_rate": 48000,
-            "window_size": 1024,
-            "hop_size": 480,
-            "fmin": 50,
-            "fmax": 14000,
-            "class_num": 527,
-            "model_type": "HTSAT",
-            "model_name": "base"
-        }
 
     def __len__(self):
         return len(self.json_data)
     
-    def preprocess_waveform(self, wav_path, duration):
+    def preprocess_waveform(self, wav_path, duration, fuse=True):
         waveform, sr = librosa.load(wav_path, sr=self.sr, duration=duration)
         audio_waveform = int16_to_float32(float32_to_int16(waveform))
-        audio_waveform = torch.from_numpy(audio_waveform).float()
-        temp_dict = {}
-        temp_dict = get_audio_features(
-            temp_dict, audio_waveform, 480000,
-            data_truncating='fusion',
-            data_filling='repeatpad',
-            audio_cfg=self.audio_cfg,
-            require_grad=False,
-        )
-        return temp_dict
+        max_length = self.audio_cfg["clip_samples"]
+        if not fuse and len(audio_waveform) > max_length: # Seperate into partial segments
+            results = []
+            segments = [audio_waveform[i:i+max_length] for i in range(0, len(audio_waveform), max_length)]
+            for segment in segments:
+                segment_tensor = torch.from_numpy(segment).float()
+                temp_dict = {}
+                temp_dict = get_audio_features(
+                    temp_dict, segment_tensor, max_length,
+                    data_truncating='fusion',
+                    data_filling='repeatpad',
+                    audio_cfg=self.audio_cfg,
+                    require_grad=False,
+                )
+                results.append(temp_dict)
+            return results
+        else: # Fused, single waveform
+            audio_waveform = torch.from_numpy(audio_waveform).float()
+            temp_dict = {}
+            temp_dict = get_audio_features(
+                temp_dict, audio_waveform, max_length,
+                data_truncating='fusion',
+                data_filling='repeatpad',
+                audio_cfg=self.audio_cfg,
+                require_grad=False,
+            )
+            return temp_dict
 
     def __getitem__(self, index):
         item = self.json_data[index]
         wav_path = item["audio"]
+        embedding_path = item["embedding_path"]
+        embedding = np.load(embedding_path)
         duration = item["duration"]
-        audio_feature = self.preprocess_waveform(wav_path, duration)
+        audio_feature = self.preprocess_waveform(wav_path, duration, fuse=True) # Always not fuse it's feature
         caption = item["caption"]
         if self.train and isinstance(caption, list):
             caption = random.choice(item["caption"])
         caption = text_preprocess(caption)
         retr_audio_features = []
         retr_captions = []
-        if wav_path in self.retrieve_map and self.top_k > 0 and len(self.retrieve_map[wav_path]) > self.top_k:
+        if wav_path in self.retrieve_map:
             retrieve_items = self.retrieve_map[wav_path]
             weights = list(range(len(retrieve_items), 0, -1))
             if self.train:
@@ -114,7 +121,7 @@ class AudioLanguagePretrainDataset(Dataset):
             #     selected_items[i] = random_item
             retr_audio_features = [self.preprocess_waveform(retr_wav_path, duration) for (retr_wav_path, caption) in selected_items]
             retr_captions = [text_preprocess(caption) for (retr_wav_path, caption) in selected_items]
-        return audio_feature, caption, wav_path, retr_audio_features, retr_captions
+        return audio_feature, caption, wav_path, retr_audio_features, retr_captions, embedding
 
 
 def pretrain_dataloader(config,
@@ -129,7 +136,7 @@ def pretrain_dataloader(config,
                         shuffle=False):
     blacklist = None if 'val' in subset else config.blacklist
     batch_size = 1 if 'val' in subset else config.data_args.batch_size
-    dataset = AudioLanguagePretrainDataset(config[subset], config["audio_args"], blacklist, 'train' in subset, retrieve_map, top_k)
+    dataset = AudioLanguagePretrainDataset(config[subset], config.audio_args, blacklist, 'train' in subset, retrieve_map, top_k)
     if bucket:
         sampler = BySequenceLengthSampler(lengths=dataset.lengths,
                                           bucket_boundaries=bucket_boundaries,
@@ -147,6 +154,7 @@ def pretrain_dataloader(config,
         sampler = DistributedSampler(dataset,
                                      num_replicas=num_tasks,
                                      rank=global_rank,
+                                     drop_last=False,
                                      shuffle=True)
     else:
         sampler = None
@@ -158,12 +166,7 @@ def pretrain_dataloader(config,
         pin_memory=True,
         sampler=sampler,
         shuffle=shuffle,
-        drop_last=True,
+        drop_last=False,
         collate_fn=collate_fn,
     )
 
-
-if __name__ == '__main__':
-    with open("../../WavCaps/captioning/settings/pretrain.yaml", "r") as f:
-        config = yaml.safe_load(f)
-    print(config)

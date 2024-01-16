@@ -2,15 +2,16 @@ exp_name: 'pretrain'
 seed: 20
 
 train_jsons: [
- 'data/json_files/BBC_Sound_Effects/bbc_final.json',
- 'data/json_files/FreeSound/fsd_final.json',
- 'data/json_files/SoundBible/sb_final.json',
- "data/json_files/AudioSet_SL/as_final.json",
- #"data/json_files/Clotho/clotho_final.json"
+  #'data/json_files/BBC_Sound_Effects/bbc_final.json',
+  #'data/json_files/FreeSound/fsd_final.json',
+  #'data/json_files/SoundBible/sb_final.json',
+  #"data/json_files/AudioSet_SL/as_final.json",
+  "data/json_files/Auto_ACD/train.json"
 ]
 val_jsons: [
-  "data/json_files/AudioSet/val.json",
+  #"data/json_files/AudioSet/val.json",
   #"data/json_files/Clotho/val.json",
+  "data/json_files/Auto_ACD/val.json"
 ]
 blacklist: "data/json_files/blacklist/blacklist_exclude_test_ac.json"
 # dataset == 'AudioCaps': sampling_rate = 32000
@@ -18,14 +19,17 @@ blacklist: "data/json_files/blacklist/blacklist_exclude_test_ac.json"
 # 48000 for CLAP
 # 32000 for HTSAT
 audio_args:
-  sr: 48000
-  n_fft: 1024
-  hop_size: 320
-  f_min: 50
-  f_max: 14000
-  n_mels: 64
-  max_length: 10
-  mono: True
+  audio_length: 1024
+  clip_samples: 480000
+  mel_bins: 64
+  sample_rate: 48000
+  window_size: 1024
+  hop_size: 480
+  fmin: 50
+  fmax: 14000
+  class_num: 527
+  model_type: "HTSAT"
+  model_name": "base"
 
 data_args:
   dataset: "Clotho"
@@ -35,19 +39,31 @@ data_args:
 
 model_args:
   name: "CLAP2LLAMA"
-  use_aud_start_end: False
-  use_fuse: False
   retr_prompt: ""
   task_prompt: ""
+  caption_prompt : ""
+  #retr_prompt: "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\nUSER: Similar audio sounds and captions are given in pairs. "
+  #retr_prompt: "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\nUSER: "
+  #task_prompt: "Describe this Audio in detail. "
+  #task_prompt: "\nAnswer concisely. Briefly describe this Audio. Audio: "
+  #task_prompt: "Briefly describe this Audio.\n Audio: "
+  #task_prompt: "\nDescribe this Audio: "
+  #caption_prompt : "\nASSISTANT: Caption: "
   freeze_am: True
-  unfreeze_am: ["linear_a_q","linear_b_q","linear_a_v","linear_b_v"]
+  unfreeze_am: []
+  # unfreeze_am: ["linear_a_q","linear_b_q","linear_a_v","linear_b_v"]
   freeze_lm: True
   freeze_align: False
   #checkpoint_path: "./pretrained_models/pretrained_MLP/" # 32, 16
   #checkpoint_path: "./pretrained_models/audio_caption_LGTM/"
   #checkpoint_path: "./pretrained_models/pretrained_LGTM/"
+  #checkpoint_path: "./pretrained_models/pretrained_Qformer/"
+  #checkpoint_path: "./pretrained_models/pretrained_Perceiver/"
   #checkpoint_path: "./pretrained_models/pretrained_MLP_15epoch_w16_s16/"
-  checkpoint_path: ""
+  #checkpoint_path: "./pretrained_models/pretrained_MLP_clap_lora/"
+  #checkpoint_path: "./pretrained_models/pretrained_MLP_clap_lora_prompt/"
+  checkpoint_path: "./pretrained_models/pretrained_MLP_clap_lora_AutoACD/"
+  #checkpoint_path: ""
   encoder:
     model_name: "CLAPAudioEncoder"
     pretrained: True
@@ -57,10 +73,10 @@ model_args:
     select_feature: "fine_grained_embedding"
     sequence_length: 1024
     hidden_size: 768
-    window_size: 4 # (32,32) = [B,32,H], (32,16) = [B,63,H] (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
-    step_size: 4
+    window_size: 16 # (32,32) = [B,32,H], (32,16) = [B,63,H] (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
+    step_size: 16
   align:
-    model_name: "Qformer"
+    model_name: "MLP"
 
 
 optim_args:
@@ -72,11 +88,11 @@ optim_args:
   weight_decay: 0.0
 
 training:
-  warmup_epochs: 2
+  warmup_epochs: 1
   epochs: 5
   clip_grad: 1
-  output_path: "./pretrained_models/audio_caption_Qformer/"
-  eval: False
+  output_path: "./pretrained_models/pretrained_Qformer"
+  eval: True
   validate: False
 
 index_args:
@@ -84,6 +100,10 @@ index_args:
   #index_path: "./data/index/final_index_big_kb/audio2audio_train.json"
   #index_path: "./data/index/final_index_big_kb_pretrainQuery/audio2audio_pretrain.json"
   #index_path: "./data/index/final_index_big_kb/audio2audio_val.json"
+  #index_path: "./data/index/final_index_big_kb/audio2text_val.json"
+  #index_path: "./data/index/final_index_big_kb_clotho/audio2audio_val.json"
+  #index_path: "./data/index/final_index_big_kb_clotho/audio2text_val.json"
   #index_path: "./data/index/final_index_big_kb/frame2frame_val.json"
   #index_path: "./data/index/final_index_big_kb/audio2text_val.json"
+  #index_path: "./data/index/final_index_only_clotho/audio2audio_val.json"
   top_k: 0
