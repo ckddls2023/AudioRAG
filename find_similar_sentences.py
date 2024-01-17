@@ -167,9 +167,10 @@ if __name__ == "__main__":
     encoder_config = CLAPEncoderConfig.from_dict(encoder_config)
     audio_encoder = CLAPAudioTower(encoder_config)
     align_model = align2text(hidden_size=768, num_latents=64, num_layers=2)
-    checkpoint_path = "./retriever_models/"
+    # checkpoint_path = "./retriever_models/"
+    checkpoint_path = "./retriever_models_lm_attn/"
     audio_encoder_ckpt = os.path.join(checkpoint_path, "audio_encoder.bin")
-    align_model_ckpt = os.path.join(checkpoint_path, "epoch_5.pt")
+    align_model_ckpt = os.path.join(checkpoint_path, "epoch_10.pt")
     if os.path.exists(audio_encoder_ckpt):
         audio_encoder.load_state_dict(torch.load(audio_encoder_ckpt), strict=False)
     if os.path.exists(align_model_ckpt):
@@ -185,9 +186,9 @@ if __name__ == "__main__":
     # large
     # base
     train_jsons = [
-        "data/json_files/BBC_Sound_Effects/bbc_final.json",
-        "data/json_files/FreeSound/fsd_final.json",
-        "data/json_files/SoundBible/sb_final.json",
+        # "data/json_files/BBC_Sound_Effects/bbc_final.json",
+        # "data/json_files/FreeSound/fsd_final.json",
+        # "data/json_files/SoundBible/sb_final.json",
         "data/json_files/AudioSet/train.json",
         #"data/json_files/AudioSet_SL/as_final.json",
         "data/json_files/Clotho/train.json",
@@ -219,16 +220,24 @@ if __name__ == "__main__":
                     train_audio_paths.append(entry["audio"])
 
     # If it is last one, base, large, huge
-    # "./data/index/final_atc_lm_attn/"
-    # mixed_index_file_path = "./data/index/train_sentence_mixed_embed.bin"
-    # text_index_file_path = "./data/index/train_sentence_audio_embed.bin"
-    # audio_index_file_path = "./data/index/train_sentence_text_embed.bin"
-    mixed_index_file_path = "./data/index/train_sentence_mixed_embed_largeKB.bin"
-    text_index_file_path = "./data/index/train_sentence_audio_embed_largeKB.bin"
-    audio_index_file_path = "./data/index/train_sentence_text_embed_largeKB.bin"
-    # mixed_index_file_path = "./data/index/train_sentence_mixed_embed_hugeKB.bin"
-    # text_index_file_path = "./data/index/train_sentence_audio_embed_hugeKB.bin"
-    # audio_index_file_path = "./data/index/train_sentence_text_embed_hugeKB.bin"
+    mixed_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_mixed_embed.bin"
+    text_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_audio_embed.bin"
+    audio_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_text_embed.bin"
+    # mixed_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_mixed_embed_largeKB.bin"
+    # text_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_audio_embed_largeKB.bin"
+    # audio_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_text_embed_largeKB.bin"
+    # mixed_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_mixed_embed_hugeKB.bin"
+    # text_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_audio_embed_hugeKB.bin"
+    # audio_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_text_embed_hugeKB.bin"
+    # mixed_index_file_path = "./data/index/final_atc_without_lm_attn/train_sentence_mixed_embed.bin"
+    # text_index_file_path = "./data/index/final_atc_without_lm_attn/train_sentence_audio_embed.bin"
+    # audio_index_file_path = "./data/index/final_atc_without_lm_attn/train_sentence_text_embed.bin"
+    # mixed_index_file_path = "./data/index/final_atc_without_lm_attn/train_sentence_mixed_embed_largeKB.bin"
+    # text_index_file_path = "./data/index/final_atc_without_lm_attn/train_sentence_audio_embed_largeKB.bin"
+    # audio_index_file_path = "./data/index/final_atc_without_lm_attn/train_sentence_text_embed_largeKB.bin"
+    # mixed_index_file_path = "./data/index/final_atc_without_lm_attn/train_sentence_mixed_embed_hugeKB.bin"
+    # text_index_file_path = "./data/index/final_atc_without_lm_attn/train_sentence_audio_embed_hugeKB.bin"
+    # audio_index_file_path = "./data/index/final_atc_without_lm_attn/train_sentence_text_embed_hugeKB.bin"
     if os.path.exists(mixed_index_file_path):
         audio_index = faiss.read_index(audio_index_file_path)
         text_index = faiss.read_index(text_index_file_path)
@@ -289,47 +298,47 @@ if __name__ == "__main__":
     print(f"Total audio paths in validation jsons : {len(val_audio_paths)}")
     print(f"Total averaged val embeddings : {val_embeddings.shape[0]}")
 
-    k = 5  # Number of nearest neighbors to find
-    D, I = audio_index.search(val_embeddings, k)
-    results = {}
-    for val_idx, neighbors in enumerate(I):
-        val_audio = val_audio_paths[val_idx]
-        similar_pairs = []
-        for neighbor_idx in neighbors:
-            train_audio = train_audio_paths[neighbor_idx]
-            train_caption = train_sentences[neighbor_idx]
-            similar_pairs.append([train_audio, train_caption])
-        results[val_audio] = similar_pairs
-
-
-    # k = 2  # Number of nearest neighbors to find
-    # MD, MI = mixed_index.search(val_embeddings, k)
-    # AD, AI = audio_index.search(val_embeddings, k)
-    # TD, TI = mixed_index.search(val_embeddings, k)
+    # k = 5  # Number of nearest neighbors to find
+    # D, I = audio_index.search(val_embeddings, k)
     # results = {}
-    # for val_idx, val_audio_path in tqdm(enumerate(val_audio_paths)):
+    # for val_idx, neighbors in enumerate(I):
+    #     val_audio = val_audio_paths[val_idx]
     #     similar_pairs = []
-    #     m_neighbors = MI[val_idx]
-    #     a_neighbors = AI[val_idx]
-    #     t_neighbors = TI[val_idx]
-    #     for m_idx, a_idx, t_idx in zip(m_neighbors, a_neighbors, t_neighbors):
-    #         val_audio_basename = os.path.basename(val_audio_path)
-    #         if (
-    #             val_audio_path != train_audio_paths[m_idx]
-    #             and os.path.basename(train_audio_paths[m_idx]) != val_audio_basename
-    #         ):
-    #             similar_pairs.append([train_audio_paths[m_idx], train_sentences[m_idx]])
-    #         if (
-    #             val_audio_path != train_audio_paths[a_idx]
-    #             and os.path.basename(train_audio_paths[a_idx]) != val_audio_basename
-    #         ):
-    #             similar_pairs.append([train_audio_paths[a_idx], train_sentences[a_idx]])
-    #         if (
-    #             val_audio_path != train_audio_paths[t_idx]
-    #             and os.path.basename(train_audio_paths[t_idx]) != val_audio_basename
-    #         ):
-    #             similar_pairs.append([train_audio_paths[t_idx], train_sentences[t_idx]])
-    #     results[val_audio_path] = similar_pairs
+    #     for neighbor_idx in neighbors:
+    #         train_audio = train_audio_paths[neighbor_idx]
+    #         train_caption = train_sentences[neighbor_idx]
+    #         similar_pairs.append([train_audio, train_caption])
+    #     results[val_audio] = similar_pairs
+
+
+    k = 2  # Number of nearest neighbors to find
+    MD, MI = mixed_index.search(val_embeddings, k)
+    AD, AI = audio_index.search(val_embeddings, k)
+    TD, TI = mixed_index.search(val_embeddings, k)
+    results = {}
+    for val_idx, val_audio_path in tqdm(enumerate(val_audio_paths)):
+        similar_pairs = []
+        m_neighbors = MI[val_idx]
+        a_neighbors = AI[val_idx]
+        t_neighbors = TI[val_idx]
+        for m_idx, a_idx, t_idx in zip(m_neighbors, a_neighbors, t_neighbors):
+            val_audio_basename = os.path.basename(val_audio_path)
+            if (
+                val_audio_path != train_audio_paths[m_idx]
+                and os.path.basename(train_audio_paths[m_idx]) != val_audio_basename
+            ):
+                similar_pairs.append([train_audio_paths[m_idx], train_sentences[m_idx]])
+            if (
+                val_audio_path != train_audio_paths[a_idx]
+                and os.path.basename(train_audio_paths[a_idx]) != val_audio_basename
+            ):
+                similar_pairs.append([train_audio_paths[a_idx], train_sentences[a_idx]])
+            if (
+                val_audio_path != train_audio_paths[t_idx]
+                and os.path.basename(train_audio_paths[t_idx]) != val_audio_basename
+            ):
+                similar_pairs.append([train_audio_paths[t_idx], train_sentences[t_idx]])
+        results[val_audio_path] = similar_pairs
 
     # Save results to JSON
     with open("retrieved_results.json", "w") as outfile:

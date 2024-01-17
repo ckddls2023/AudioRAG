@@ -3,6 +3,7 @@ import librosa
 import numpy as np
 from models.audio_encoder import CLAPAudioTower, CLAPEncoderConfig
 from laion_clap.training.data import get_audio_features, int16_to_float32, float32_to_int16
+from scipy.ndimage import gaussian_filter1d
 
 # Load your audio file
 # encoder_config = {
@@ -61,8 +62,12 @@ axs[0].set_xlabel('Time')
 axs[0].set_ylabel('Amplitude')
 
 # Plot attention results
-for i in range(attention_data.shape[0]):
-    axs[1].plot(attention_data[i, :], label=f'Layer {i+1}')
+for i in range(1):
+    smoothed_attention = gaussian_filter1d(attention_data[i, :], 1)
+    axs[1].plot(smoothed_attention)
+# for i in range(attention_data.shape[0]):
+#     smoothed_attention = gaussian_filter1d(attention_data[i, :], sigma)
+#     axs[1].plot(smoothed_attention[i, :], label=f'Layer {i+1}')
 axs[1].set_title('Attention Results')
 axs[1].set_xlabel('Tokens')
 axs[1].set_ylabel('Attention Value')

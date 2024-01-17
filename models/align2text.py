@@ -47,13 +47,14 @@ class align2text(nn.Module):
             audio_features = self.audio_projection(cls_output)  # Projecting the CLS token output
             text_features = self.text_projection(text_embed)
             attn_score = torch.concat(output.attentions, dim=1)  # [[B,nH,S,S], [B,nH,S,S]] # WARN: remember to use output_attentions=True
-            cls_attn = attn_score[:, :, 0, 1:] # [B,2*nH,1,64]}
+            cls_attn = attn_score[:, :, 0, 1:] # [B,2*nH,1,256]}
             grouped_cls_attn = cls_attn.view(cls_attn.shape[0], 2, 12, 256)  # [B,2,12, :, :]
-            averaged_cls_attn = grouped_cls_attn.mean(dim=2)  # [B,2,64]
+            averaged_cls_attn = grouped_cls_attn.mean(dim=2)  # [B,2,64] # => CLS token except
             #averaged_cls_attn = averaged_cls_attn[:,0,:]
             if lm_attn is not None:
-                lm_attn = F.normalize(lm_attn, p=2, dim=-1) # since it's softmax score
-                cls_attn_log = F.log_softmax(averaged_cls_attn, dim=-1) # B,nH,S
+                lm_attn = F.normalize(lm_attn, p=1, dim=-1) # since it's softmax score/ check....
+                # cls_attn_log = F.log_softmax(averaged_cls_attn, dim=-1) # B,nH,S / really critical...  / 100
+                cls_attn_log = F.log(F.normalize(averaged_cls_attn, p=1, dim=-1)) # since it's softmax score/ check....
                 kl_loss = F.kl_div(cls_attn_log, lm_attn, reduction='mean')  # or 'sum', 'mean', or 'none'
             
             # BYOL loss style
@@ -83,7 +84,7 @@ class align2text(nn.Module):
                 F.cross_entropy(logits_per_text, labels)
             ) / 2
             if lm_attn is not None:
-                total_loss += 0.0001 * kl_loss
+                total_loss += 0.01 * kl_loss
             return {
                 "loss": total_loss
             }

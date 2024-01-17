@@ -107,7 +107,7 @@ def main():
         config=OmegaConf.to_container(config, resolve=True, throw_on_missing=True),
         init_kwargs={"wandb": {"name": exp_name}},
     )
-    config.optim_args.lr = 1e-3 # Language Bind
+    config.optim_args.lr = 1e-3 # Language Bind 5e-4, LiT 1e-3
     config.optim_args.weight_decay = 1e-4 # Language Bind 0.2, LiT 1e-4
     config.index_args.index_path = ""
     config.index_args.top_k = 0
@@ -115,7 +115,7 @@ def main():
     config.train_jsons = [
         "./data/json_files/AudioSet/train.json",  # 48K
         "./data/json_files/Clotho/train.json",  # 6K
-        "./data/json_files/Auto_ACD/train.json",  # 1903803
+        "./data/json_files/Auto_ACD/train.json",  # 1903803, 0.6M => 1.0M
         # "./data/json_files/BBC_Sound_Effects/bbc_final.json",
         # "./data/json_files/FreeSound/fsd_final.json",
     ]
