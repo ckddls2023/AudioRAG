@@ -28,7 +28,7 @@ def load_json_file(files, blacklist=None, train=True):
         parent_path = os.path.basename(os.path.dirname(file))  # Extracts the parent directory name
         with open(file, "r") as f:
             json_obj = json.load(f)
-            for i, item in enumerate(json_obj["data"][:620000]):
+            for i, item in enumerate(json_obj["data"][:1250000]):
                 item["embedding_path"] = f"./data/embeddings/{parent_path}/{i:07d}.npy"
                 if "FreeSound" in file and blacklist:
                     if item["id"] in blacklist["FreeSound"]:

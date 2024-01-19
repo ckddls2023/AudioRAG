@@ -27,13 +27,14 @@ class align2text(nn.Module):
         self.align.bert.embeddings.word_embeddings = None
         self.align.bert.embeddings.position_embeddings = None
         self.cls_token = nn.Parameter(torch.randn(1, 1, hidden_size))
+        self.cls_token.data.normal_(mean=0.0, std=config.initializer_range)
         #self.audio_projection = nn.Linear(hidden_size, hidden_size)
         # self.audio_ln = nn.LayerNorm(hidden_size)  # LayerNorm for audio features
         # self.text_ln = nn.LayerNorm(hidden_size)   # LayerNorm for text features
         self.audio_projection = nn.Linear(hidden_size, 512)
         self.text_projection = nn.Linear(hidden_size, 512)
         
-    def forward(self, audio_embed, text_embed, lm_attn=None):
+    def forward(self, audio_embed, text_embed, lm_attn=None, output_attentions=False):
         if self.training:
             cls_tokens = self.cls_token.expand(audio_embed.shape[0], -1, -1)  # Replicating cls_token for the batch
             audio_embed = torch.cat((cls_tokens, audio_embed), dim=1)  # Concatenating along the sequence dimension
@@ -54,7 +55,7 @@ class align2text(nn.Module):
             if lm_attn is not None:
                 lm_attn = F.normalize(lm_attn, p=1, dim=-1) # since it's softmax score/ check....
                 # cls_attn_log = F.log_softmax(averaged_cls_attn, dim=-1) # B,nH,S / really critical...  / 100
-                cls_attn_log = F.log(F.normalize(averaged_cls_attn, p=1, dim=-1)) # since it's softmax score/ check....
+                cls_attn_log = torch.log(F.normalize(averaged_cls_attn, p=1, dim=-1)) # since it's softmax score/ check....
                 kl_loss = F.kl_div(cls_attn_log, lm_attn, reduction='mean')  # or 'sum', 'mean', or 'none'
             
             # BYOL loss style
@@ -100,11 +101,16 @@ class align2text(nn.Module):
                 )
                 cls_output = output.last_hidden_state[:, 0, :]  # Extracting the CLS token output
                 audio_features = self.audio_projection(cls_output)  # Projecting the CLS token output
-            text_features = None
             if text_embed is not None:
                 text_features = self.text_projection(text_embed)
-            return { # For evaluation
+            out = { # For evaluation
                 "audio_features": audio_features,
                 "text_features": text_features
             }
-            
+            if output_attentions:
+                attn_score = torch.concat(output.attentions, dim=1)  # [[B,nH,S,S], [B,nH,S,S]] # WARN: remember to use output_attentions=True
+                cls_attn = attn_score[:, :, 0, 1:] # [B,2*nH,1,256]}
+                grouped_cls_attn = cls_attn.view(cls_attn.shape[0], 2, 12, 256)  # [B,2,12,256]
+                averaged_cls_attn = grouped_cls_attn.mean(dim=2)  # [B,2,256] # => CLS token except
+                out["cls_attn"] = averaged_cls_attn.mean(dim=1) # [B,256]
+            return out

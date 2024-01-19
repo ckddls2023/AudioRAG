@@ -94,6 +94,8 @@ def preprocess_audio_file(audio_path):
 
 def encode_audio(audio_encoder, align_model, audio_paths, batch_size=256):
     embeddings = []
+    audio_encoder_embed = []
+    audio_cls_attn = []
     with torch.no_grad():
         for i in tqdm(range(0, len(audio_paths), batch_size)):
             audio_batch = audio_paths[i : i + batch_size]
@@ -102,12 +104,18 @@ def encode_audio(audio_encoder, align_model, audio_paths, batch_size=256):
             ]
             audio_features = ray.get(refs)
             audio_embed = audio_encoder(audio_features).last_hidden_state  # B, 64, 768
-            output = align_model(audio_embed, None)
+            output = align_model(audio_embed, None, output_attentions=True)
             embeddings.append(
                 output["audio_features"].detach().to("cpu", non_blocking=True).numpy()
             )
+            audio_encoder_embed.append(audio_embed.detach().to("cpu",non_blocking=True))
+            audio_cls_attn.append(output["cls_attn"].detach().to("cpu", non_blocking=True))
     torch.cuda.synchronize()
-    return np.vstack(embeddings)
+    return (
+        np.vstack(embeddings),
+        np.vstack(audio_encoder_embed),
+        np.vstack(audio_cls_attn)
+    )
 
 
 def encode_audio_texts(
@@ -116,6 +124,8 @@ def encode_audio_texts(
     audio_embeddings = []
     text_embeddings = []
     mixed_embeddings = []
+    audio_encoder_embed = []
+    audio_cls_attn = []
     with torch.no_grad():
         for i in tqdm(range(0, len(sentences), batch_size)):
             captions = sentences[i : i + batch_size]
@@ -128,7 +138,7 @@ def encode_audio_texts(
             text_embed = text_encoder.encode(
                 captions, normalize_embeddings=True, convert_to_tensor=True
             )
-            output = align_model(audio_embed, text_embed)
+            output = align_model(audio_embed, text_embed, output_attentions=True)
             mixed_embed = output["audio_features"] + output["text_features"]
             audio_embeddings.append(
                 output["audio_features"].detach().to("cpu", non_blocking=True).numpy()
@@ -139,11 +149,15 @@ def encode_audio_texts(
             mixed_embeddings.append(
                 mixed_embed.detach().to("cpu", non_blocking=True).numpy()
             )
+            audio_encoder_embed.append(audio_embed.detach().to("cpu",non_blocking=True))
+            audio_cls_attn.append(output["cls_attn"].detach().to("cpu", non_blocking=True))
     torch.cuda.synchronize()
     return (
         np.vstack(audio_embeddings),
         np.vstack(text_embeddings),
         np.vstack(mixed_embeddings),
+        np.vstack(audio_encoder_embed),
+        np.vstack(audio_cls_attn),
     )  # 512
 
 
@@ -157,7 +171,7 @@ if __name__ == "__main__":
         "pretrained": True,
         "freeze": True,
         "use_lora": True,
-        "spec_augment": True,
+        "spec_augment": False,
         "select_feature": "fine_grained_embedding",
         "sequence_length": 1024,
         "hidden_size": 768,
@@ -170,7 +184,7 @@ if __name__ == "__main__":
     # checkpoint_path = "./retriever_models/"
     checkpoint_path = "./retriever_models_lm_attn/"
     audio_encoder_ckpt = os.path.join(checkpoint_path, "audio_encoder.bin")
-    align_model_ckpt = os.path.join(checkpoint_path, "epoch_10.pt")
+    align_model_ckpt = os.path.join(checkpoint_path, "epoch_15.pt")
     if os.path.exists(audio_encoder_ckpt):
         audio_encoder.load_state_dict(torch.load(audio_encoder_ckpt), strict=False)
     if os.path.exists(align_model_ckpt):
@@ -199,7 +213,7 @@ if __name__ == "__main__":
         # "data/json_files/AudioSet/train.json",
         # "data/json_files/Clotho/train.json",
         "data/json_files/AudioSet/val.json",
-        "data/json_files/Clotho/val.json",
+        # "data/json_files/Clotho/val.json",
         # "data/json_files/Auto_ACD/val.json",
         # "data/json_files/MACS/val.json",
     ]
@@ -219,16 +233,37 @@ if __name__ == "__main__":
                     train_sentences.append(entry["caption"])
                     train_audio_paths.append(entry["audio"])
 
-    # If it is last one, base, large, huge
+    # AudioCaps
+    val_audio_embed_file_path         = "./data/index/final_atc_lm_attn/val_caps_audio_embed.npy"
+    val_audio_encoder_embed_file_path = "./data/index/final_atc_lm_attn/val_caps_audio_encoder_embed.npy" 
+    val_audio_cls_attn_file_path      = "./data/index/final_atc_lm_attn/val_caps_audio_cls_attn.npy" 
+    # Clotho
+    # valid_audio_embed_file_path         = "./data/index/final_atc_lm_attn/val_clotho_audio_embed.pt"
+    # valid_audio_encoder_embed_file_path = "./data/index/final_atc_lm_attn/val_clotho_audio_encoder_embed.pt" 
+    # valid_audio_cls_attn_file_path      = "./data/index/final_atc_lm_attn/val_clotho_audio_cls_attn.pt" 
+    # AutoACD
+    # valid_audio_embed_file_path         = "./data/index/final_atc_lm_attn/val_autoacd_audio_embed.pt"
+    # valid_audio_encoder_embed_file_path = "./data/index/final_atc_lm_attn/val_autoacd_audio_encoder_embed.pt" 
+    # valid_audio_cls_attn_file_path      = "./data/index/final_atc_lm_attn/val_autoacd_audio_cls_attn.pt" 
+     
+    # With Attn distill
+    train_audio_encoder_embed_file_path  = "./data/index/final_atc_lm_attn/train_base_audio_encoder_embed.npy" # This is for audio features [B, 256, 768]
+    train_audio_cls_attn_file_path  = "./data/index/final_atc_lm_attn/train_base_audio_cls_attn.npy" # This is for audio features [B, 256, 768]
     mixed_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_mixed_embed.bin"
-    text_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_audio_embed.bin"
+    text_index_file_path  = "./data/index/final_atc_lm_attn/train_sentence_audio_embed.bin"
     audio_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_text_embed.bin"
+    # train_audio_encoder_embed_file_path  = "./data/index/final_atc_lm_attn/train_large_audio_encoder_embed.pt" # This is for audio features [B, 256, 768]
+    # train_audio_cls_attn_file_path  = "./data/index/final_atc_lm_attn/train_large_audio_cls_attn.pt" # This is for audio features [B, 256, 768]
     # mixed_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_mixed_embed_largeKB.bin"
     # text_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_audio_embed_largeKB.bin"
     # audio_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_text_embed_largeKB.bin"
+    # train_audio_encoder_embed_file_path  = "./data/index/final_atc_lm_attn/train_huge_audio_encoder_embed.pt" # This is for audio features [B, 256, 768]
+    # train_audio_cls_attn_file_path  = "./data/index/final_atc_lm_attn/train_huge_audio_cls_attn.pt" # This is for audio features [B, 256, 768]
     # mixed_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_mixed_embed_hugeKB.bin"
     # text_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_audio_embed_hugeKB.bin"
     # audio_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_text_embed_hugeKB.bin"
+    
+    # Without Attn distill
     # mixed_index_file_path = "./data/index/final_atc_without_lm_attn/train_sentence_mixed_embed.bin"
     # text_index_file_path = "./data/index/final_atc_without_lm_attn/train_sentence_audio_embed.bin"
     # audio_index_file_path = "./data/index/final_atc_without_lm_attn/train_sentence_text_embed.bin"
@@ -242,10 +277,14 @@ if __name__ == "__main__":
         audio_index = faiss.read_index(audio_index_file_path)
         text_index = faiss.read_index(text_index_file_path)
         mixed_index = faiss.read_index(mixed_index_file_path)
+        train_audio_encoder_embed = np.load(train_audio_encoder_embed_file_path)
+        train_audio_cls_attn = np.load(train_audio_cls_attn_file_path)
     else:
-        audio_embeddings, text_embeddings, mixed_embeddings = encode_audio_texts(
+        audio_embeddings, text_embeddings, mixed_embeddings, train_audio_encoder_embed, train_audio_cls_attn = encode_audio_texts(
             audio_encoder, text_encoder, align_model, train_audio_paths, train_sentences
         )
+        np.save(train_audio_encoder_embed_file_path, train_audio_encoder_embed)
+        np.save(train_audio_cls_attn_file_path, train_audio_cls_attn)
         audio_index = faiss.IndexFlatIP(audio_embeddings.shape[1])
         audio_index.add(audio_embeddings)
         text_index = faiss.IndexFlatIP(text_embeddings.shape[1])
@@ -294,51 +333,68 @@ if __name__ == "__main__":
     # Use ATC embedding
     print(f"Total audio paths in train jsons : {len(train_audio_paths)}")
     print(f"Total averaged train embeddings : {mixed_index.ntotal}")
-    val_embeddings = encode_audio(audio_encoder, align_model, val_audio_paths)
+    # TODO : Add to get audio_encoder_embed
+    # TODO : Add to get audio cls attn
+    # TODO : Add to save audio_encoder_embed
+    # TODO : Add to save audio cls_attn
+    if os.path.exists(val_audio_embed_file_path):
+        val_embeddings = np.load(val_audio_embed_file_path)
+        val_audio_encoder_embed = np.load(val_audio_encoder_embed_file_path)
+        val_audio_cls_attn = np.load(val_audio_cls_attn_file_path)
+    else:
+        val_embeddings, val_audio_encoder_embed, val_audio_cls_attn = encode_audio(audio_encoder, align_model, val_audio_paths)
     print(f"Total audio paths in validation jsons : {len(val_audio_paths)}")
     print(f"Total averaged val embeddings : {val_embeddings.shape[0]}")
 
-    # k = 5  # Number of nearest neighbors to find
-    # D, I = audio_index.search(val_embeddings, k)
-    # results = {}
-    # for val_idx, neighbors in enumerate(I):
-    #     val_audio = val_audio_paths[val_idx]
-    #     similar_pairs = []
-    #     for neighbor_idx in neighbors:
-    #         train_audio = train_audio_paths[neighbor_idx]
-    #         train_caption = train_sentences[neighbor_idx]
-    #         similar_pairs.append([train_audio, train_caption])
-    #     results[val_audio] = similar_pairs
-
-
-    k = 2  # Number of nearest neighbors to find
-    MD, MI = mixed_index.search(val_embeddings, k)
-    AD, AI = audio_index.search(val_embeddings, k)
-    TD, TI = mixed_index.search(val_embeddings, k)
+    k = 5  # Number of nearest neighbors to find
+    D, I = audio_index.search(val_embeddings, k)
     results = {}
-    for val_idx, val_audio_path in tqdm(enumerate(val_audio_paths)):
+    for val_idx, neighbors in enumerate(I):
+        val_audio = val_audio_paths[val_idx]
         similar_pairs = []
-        m_neighbors = MI[val_idx]
-        a_neighbors = AI[val_idx]
-        t_neighbors = TI[val_idx]
-        for m_idx, a_idx, t_idx in zip(m_neighbors, a_neighbors, t_neighbors):
-            val_audio_basename = os.path.basename(val_audio_path)
-            if (
-                val_audio_path != train_audio_paths[m_idx]
-                and os.path.basename(train_audio_paths[m_idx]) != val_audio_basename
-            ):
-                similar_pairs.append([train_audio_paths[m_idx], train_sentences[m_idx]])
-            if (
-                val_audio_path != train_audio_paths[a_idx]
-                and os.path.basename(train_audio_paths[a_idx]) != val_audio_basename
-            ):
-                similar_pairs.append([train_audio_paths[a_idx], train_sentences[a_idx]])
-            if (
-                val_audio_path != train_audio_paths[t_idx]
-                and os.path.basename(train_audio_paths[t_idx]) != val_audio_basename
-            ):
-                similar_pairs.append([train_audio_paths[t_idx], train_sentences[t_idx]])
-        results[val_audio_path] = similar_pairs
+        indices = neighbors
+        # top_k_train_audio_embed = torch.tensor(train_audio_encoder_embed[indices]).to('cuda')
+        # val_audio_embed = torch.tensor(val_audio_encoder_embed[val_idx]).to('cuda')
+        # similarity_matrices = torch.matmul(top_k_train_audio_embed, val_audio_embed)  # shape [top_k, 256, 256]
+        # row_attention_scores = train_audio_cls_attn[indices].unsqueeze(2)  # shape [top_k, 256, 1]
+        # col_attention_scores = val_audio_cls_attn[val_idx].unsqueeze(0).unsqueeze(0)  # shape [1, 1, 256]
+        # similarity_matrices = similarity_matrices * row_attention_scores * col_attention_scores 
+        # final_scores = similarity_matrices.sum(dim=(1,2))  # [top_k]
+        # re_ranked_scores, indices = final_scores.sort(descending=True) # Re-ranking based on final scores
+        for neighbor_idx in indices:
+            train_audio = train_audio_paths[neighbor_idx]
+            train_caption = train_sentences[neighbor_idx]
+            similar_pairs.append([train_audio, train_caption])
+        results[val_audio] = similar_pairs
+
+    # k = 2  # Number of nearest neighbors to find
+    # MD, MI = mixed_index.search(val_embeddings, k)
+    # AD, AI = audio_index.search(val_embeddings, k)
+    # TD, TI = mixed_index.search(val_embeddings, k)
+    # results = {}
+    # for val_idx, val_audio_path in tqdm(enumerate(val_audio_paths)):
+    #     similar_pairs = []
+    #     m_neighbors = MI[val_idx]
+    #     a_neighbors = AI[val_idx]
+    #     t_neighbors = TI[val_idx]
+    #     for m_idx, a_idx, t_idx in zip(m_neighbors, a_neighbors, t_neighbors):
+    #         val_audio_basename = os.path.basename(val_audio_path)
+    #         if (
+    #             val_audio_path != train_audio_paths[m_idx]
+    #             and os.path.basename(train_audio_paths[m_idx]) != val_audio_basename
+    #         ):
+    #             similar_pairs.append([train_audio_paths[m_idx], train_sentences[m_idx]])
+    #         if (
+    #             val_audio_path != train_audio_paths[a_idx]
+    #             and os.path.basename(train_audio_paths[a_idx]) != val_audio_basename
+    #         ):
+    #             similar_pairs.append([train_audio_paths[a_idx], train_sentences[a_idx]])
+    #         if (
+    #             val_audio_path != train_audio_paths[t_idx]
+    #             and os.path.basename(train_audio_paths[t_idx]) != val_audio_basename
+    #         ):
+    #             similar_pairs.append([train_audio_paths[t_idx], train_sentences[t_idx]])
+    #     results[val_audio_path] = similar_pairs
 
     # Save results to JSON
     with open("retrieved_results.json", "w") as outfile:
