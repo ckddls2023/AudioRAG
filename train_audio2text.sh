@@ -19,7 +19,7 @@ if [ "$NUM_GPUS" -eq 1 ]; then
     MIXED_PRECISION="--mixed_precision no"
 else
     MULTI_GPU="--multi_gpu"
-    MIXED_PRECISION="--mixed_precision bf16"
+    MIXED_PRECISION="--mixed_precision no"
 fi
 
 accelerate launch --num_processes $NUM_GPUS --num_machines $NUM_HOSTS $MULTI_GPU $MIXED_PRECISION --machine_rank 0 --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT train_audio2text.py --config configs/pretrain.yaml

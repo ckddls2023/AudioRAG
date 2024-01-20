@@ -44,7 +44,7 @@ class align2text(nn.Module):
                 return_dict=True,
             )
             cls_output = output.last_hidden_state[:, 0, :]  # Extracting the CLS token output
-            # cls_output = F.normalize(cls_output, p=2, dim=1) # L2 normalize, struggles with converge
+            cls_output = F.normalize(cls_output, p=2, dim=1) # L2 normalize, struggles with converge
             audio_features = self.audio_projection(cls_output)  # Projecting the CLS token output
             text_features = self.text_projection(text_embed)
             attn_score = torch.concat(output.attentions, dim=1)  # [[B,nH,S,S], [B,nH,S,S]] # WARN: remember to use output_attentions=True
@@ -91,6 +91,7 @@ class align2text(nn.Module):
             }
         else:
             audio_features = None
+            text_features = None
             if audio_embed is not None:
                 cls_tokens = self.cls_token.expand(audio_embed.shape[0], -1, -1)  # Replicating cls_token for the batch
                 audio_embed = torch.cat((cls_tokens, audio_embed), dim=1)  # Concatenating along the sequence dimension
