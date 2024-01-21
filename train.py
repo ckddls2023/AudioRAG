@@ -37,7 +37,7 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0):
     epoch_loss = AverageMeter()
     start_time = time.time()
     start_time = time.time()
-    for batch_id, (audio, caption, audio_filenames, retr_audios, retr_captions) in enumerate(pbar := tqdm(dataloader, total=len(dataloader))):
+    for batch_id, (audio, caption, audio_filenames, retr_audios, retr_captions, _) in enumerate(pbar := tqdm(dataloader, total=len(dataloader))):
         iter_time = time.time() - start_time
         with accelerator.accumulate(model):
             optimizer.zero_grad()
@@ -72,7 +72,7 @@ def validate(data_loader, model, epoch):
     gen_captions = []
     ref_captions = []
     for i, batch_data in tqdm(enumerate(data_loader), total=len(data_loader)):
-        audio, caption, audio_names, retr_audios, retr_captions = batch_data
+        audio, caption, audio_names, retr_audios, retr_captions, _ = batch_data
         with accelerator.autocast():
             gen_caption = unwrapped_model.generate_caption(audio=audio, retr_audios=retr_audios, retr_captions=retr_captions)
             if "creating" in gen_caption[0]:

@@ -119,8 +119,8 @@ def main():
         # "./data/json_files/BBC_Sound_Effects/bbc_final.json",
         # "./data/json_files/FreeSound/fsd_final.json",
     ]
-    config.data_args.global_batch_size = 16384  # 1024 Global batch size
-    config.data_args.train_batch_size = 256  # 1024 Global batch size
+    config.data_args.global_batch_size = 4096 # 1024 Global batch size
+    config.data_args.batch_size = 128  # 1024 Global batch size
     config.training.output_path = "./retriever_models_lm_attn2/"
     # config.model_args.unfreeze_am = [
     #     "linear_a_q",
@@ -171,7 +171,8 @@ def main():
         retrieve_map=config.index_args.index_path,
         top_k=config.index_args.top_k,
     )
-    align_model = align2text(hidden_size=768, num_latents=64, num_layers=2)
+    # align_model = align2text(hidden_size=768, num_latents=64, num_layers=2)
+    align_model = align2text(hidden_size=768, num_latents=64, num_layers=1) # lm_attn2
     # align_model_ckpt = os.path.join("./retriever_models_lm_attn","epoch_15.pt")
     # if os.path.exists(align_model_ckpt):
     #     print("===Reload Audio-Text alignment network===")

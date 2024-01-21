@@ -11,7 +11,7 @@ class align2text(nn.Module):
     def __init__(self,
                  hidden_size=768,
                  num_latents=256,
-                 num_layers=2,
+                 num_layers=1,
                  ):
         super().__init__()
         self.num_latents=num_latents
@@ -22,6 +22,7 @@ class align2text(nn.Module):
         config.add_cross_attention = False
         config.cross_attention_freq = 1
         config.query_length = num_latents # number of latents
+        self.config = config
         self.align = BertLMHeadModel(config)   # cross-attention with audio token
         self.align.cls = None
         self.align.bert.embeddings.word_embeddings = None
@@ -44,15 +45,16 @@ class align2text(nn.Module):
                 return_dict=True,
             )
             cls_output = output.last_hidden_state[:, 0, :]  # Extracting the CLS token output
-            cls_output = F.normalize(cls_output, p=2, dim=1) # L2 normalize, struggles with converge
+            # cls_output = F.normalize(cls_output, p=2, dim=1) # L2 normalize, struggles with converge
             audio_features = self.audio_projection(cls_output)  # Projecting the CLS token output
             text_features = self.text_projection(text_embed)
             attn_score = torch.concat(output.attentions, dim=1)  # [[B,nH,S,S], [B,nH,S,S]] # WARN: remember to use output_attentions=True
             cls_attn = attn_score[:, :, 0, 1:] # [B,2*nH,1,256]}
-            grouped_cls_attn = cls_attn.view(cls_attn.shape[0], 2, 12, 256)  # [B,2,12, :, :]
-            averaged_cls_attn = grouped_cls_attn.mean(dim=2)  # [B,2,64] # => CLS token except
-            #averaged_cls_attn = averaged_cls_attn[:,0,:]
+            grouped_cls_attn = cls_attn.view(cls_attn.shape[0], self.config.num_hidden_layers, 12, 256)  # [B,2,12, :, :]
+            averaged_cls_attn = grouped_cls_attn.mean(dim=2)  # [B,num_layers,256] # => CLS token except
+            averaged_cls_attn = averaged_cls_attn[:,0,:]
             if lm_attn is not None:
+                lm_attn = lm_attn.mean(dim=1) # [B,2,256]
                 lm_attn = F.normalize(lm_attn, p=1, dim=-1) # since it's softmax score/ check....
                 # cls_attn_log = F.log_softmax(averaged_cls_attn, dim=-1) # B,nH,S / really critical...  / 100
                 cls_attn_log = torch.log(F.normalize(averaged_cls_attn, p=1, dim=-1)) # since it's softmax score/ check....
@@ -111,7 +113,7 @@ class align2text(nn.Module):
             if output_attentions:
                 attn_score = torch.concat(output.attentions, dim=1)  # [[B,nH,S,S], [B,nH,S,S]] # WARN: remember to use output_attentions=True
                 cls_attn = attn_score[:, :, 0, 1:] # [B,2*nH,1,256]}
-                grouped_cls_attn = cls_attn.view(cls_attn.shape[0], 2, 12, 256)  # [B,2,12,256]
+                grouped_cls_attn = cls_attn.view(cls_attn.shape[0], self.config.num_hidden_layers, 12, 256)  # [B,2,12,256]
                 averaged_cls_attn = grouped_cls_attn.mean(dim=2)  # [B,2,256] # => CLS token except
                 out["cls_attn"] = averaged_cls_attn.mean(dim=1) # [B,256]
             return out

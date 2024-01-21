@@ -46,7 +46,7 @@ def average_dynamic_embeddings(embeddings, caption_counts):
     return np.array(averaged_embeddings)
 
 
-def encode_texts(text_encoder, align_model, sentences, batch_size=256):
+def encode_texts(text_encoder, align_model, sentences, batch_size=1024):
     with torch.no_grad():
         embeddings = []
         for i in tqdm(range(0, len(sentences), batch_size)):
@@ -204,9 +204,9 @@ if __name__ == "__main__":
     train_jsons = [
         "data/json_files/AudioSet/train.json",
         "data/json_files/Clotho/train.json",
-        # "data/json_files/BBC_Sound_Effects/bbc_final.json",
-        # "data/json_files/FreeSound/fsd_final.json",
-        # "data/json_files/SoundBible/sb_final.json",
+        "data/json_files/BBC_Sound_Effects/bbc_final.json",
+        "data/json_files/FreeSound/fsd_final.json",
+        "data/json_files/SoundBible/sb_final.json",
         # "data/json_files/Auto_ACD/train.json",
     ] # huge
 
@@ -240,20 +240,24 @@ if __name__ == "__main__":
     # valid_audio_embed_file_path         = "./data/index/final_atc_lm_attn/val_autoacd_audio_embed.pt"
     # valid_audio_encoder_embed_file_path = "./data/index/final_atc_lm_attn/val_autoacd_audio_encoder_embed.pt" 
     # valid_audio_cls_attn_file_path      = "./data/index/final_atc_lm_attn/val_autoacd_audio_cls_attn.pt" 
+    # MACS
+    # valid_audio_embed_file_path         = "./data/index/final_atc_lm_attn/val_macs_audio_embed.pt"
+    # valid_audio_encoder_embed_file_path = "./data/index/final_atc_lm_attn/val_macs_audio_encoder_embed.pt" 
+    # valid_audio_cls_attn_file_path      = "./data/index/final_atc_lm_attn/val_macs_audio_cls_attn.pt" 
      
     # With Attn distill
     result_path = "./data/index/final_atc_lm_attn/"
-    train_audio_encoder_embed_file_path  = "/home/ckddls1321/.cache/data/train_base_audio_encoder_embed.npy" # This is for audio features [B, 256, 768]
-    train_audio_cls_attn_file_path  = "/home/ckddls1321/.cache/data/train_base_audio_cls_attn.npy" # This is for audio features [B, 256, 768]
-    mixed_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_mixed_embed.bin"
-    text_index_file_path  = "./data/index/final_atc_lm_attn/train_sentence_audio_embed.bin"
-    audio_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_text_embed.bin"
-    # train_audio_encoder_embed_file_path  = "~/.cache/data/train_large_audio_encoder_embed.npy" # This is for audio features [B, 256, 768]
-    # train_audio_cls_attn_file_path  = "./data/index/final_atc_lm_attn/train_large_audio_cls_attn.npy" # This is for audio features [B, 256, 768]
-    # mixed_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_mixed_embed_largeKB.bin"
-    # text_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_audio_embed_largeKB.bin"
-    # audio_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_text_embed_largeKB.bin"
-    # train_audio_encoder_embed_file_path  = "~/.cache/data/train_huge_audio_encoder_embed.npy" # This is for audio features [B, 256, 768]
+    # train_audio_encoder_embed_file_path  = "/home/ckddls1321/.cache/data/train_base_audio_encoder_embed.npy" # This is for audio features [B, 256, 768]
+    # train_audio_cls_attn_file_path  = "/home/ckddls1321/.cache/data/train_base_audio_cls_attn.npy" # This is for audio features [B, 256, 768]
+    # mixed_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_mixed_embed.bin"
+    # text_index_file_path  = "./data/index/final_atc_lm_attn/train_sentence_audio_embed.bin"
+    # audio_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_text_embed.bin"
+    train_audio_encoder_embed_file_path  = "/home/ckddls1321/.cache/data/train_large_audio_encoder_embed.npy" # This is for audio features [B, 256, 768]
+    train_audio_cls_attn_file_path  = "./data/index/final_atc_lm_attn/train_large_audio_cls_attn.npy" # This is for audio features [B, 256, 768]
+    mixed_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_mixed_embed_largeKB.bin"
+    text_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_audio_embed_largeKB.bin"
+    audio_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_text_embed_largeKB.bin"
+    # train_audio_encoder_embed_file_path  = "/home/ckddls1321/.cache/data/train_huge_audio_encoder_embed.npy" # This is for audio features [B, 256, 768]
     # train_audio_cls_attn_file_path  = "./data/index/final_atc_lm_attn/train_huge_audio_cls_attn.npy" # This is for audio features [B, 256, 768]
     # mixed_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_mixed_embed_hugeKB.bin"
     # text_index_file_path = "./data/index/final_atc_lm_attn/train_sentence_audio_embed_hugeKB.bin"
@@ -394,23 +398,19 @@ if __name__ == "__main__":
         val_audio_cls_attn = np.load(val_audio_cls_attn_file_path)
         print(train_audio_cls_attn.shape)
         print(val_audio_cls_attn.shape)
-        k = 20  # Number of nearest neighbors to find
+        k = 50  # Number of nearest neighbors to find
         D, I = audio_index.search(val_embeddings, k)
         results = {}
         for val_idx, neighbors in enumerate(I):
             val_audio = val_audio_paths[val_idx]
             similar_pairs = []
-            indices = neighbors
-            top_k_train_audio_embed = torch.tensor(train_audio_encoder_embed[indices]).to('cuda')
+            top_k_train_audio_embed = torch.from_numpy(train_audio_encoder_embed[neighbors]).to('cuda')
             top_k_train_audio_embed = top_k_train_audio_embed.reshape(-1,256,768)
-            val_audio_embed = torch.tensor(val_audio_encoder_embed[val_idx]).to('cuda')
+            val_audio_embed = torch.from_numpy(val_audio_encoder_embed[val_idx]).to('cuda')
             top_k_train_audio_embed = F.normalize(top_k_train_audio_embed, dim=-1)
             val_audio_embed = F.normalize(val_audio_embed, dim=-1)
             # COLBERT
             # similarity_matrices = torch.matmul(top_k_train_audio_embed, val_audio_embed.T)  # shape [top_k, 256, 256]
-            # # row_attention_scores = torch.tensor(train_audio_cls_attn[indices]).to('cuda').view(-1,256,1)  # shape [top_k, 256, 1]
-            # # col_attention_scores = torch.tensor(val_audio_cls_attn[val_idx]).to('cuda').view(1,1,256)  # shape [1, 1, 256]
-            # # similarity_matrices = similarity_matrices * row_attention_scores * col_attention_scores 
             # max_similarity_values, _ = torch.max(similarity_matrices, dim=2)  # shape [top_k, 256]
             # final_scores = torch.sum(max_similarity_values, dim=1)  # shape [top_k]
             # re_ranked_scores, indices = final_scores.sort(descending=True) # Re-ranking based on final scores
@@ -418,13 +418,13 @@ if __name__ == "__main__":
             # print(top_k_train_audio_embed.shape)
             # print(val_audio_embed.shape)
             similarity_matrices = torch.matmul(top_k_train_audio_embed, val_audio_embed.T)  # shape [top_k, 256, 256]
-            row_attention_scores = torch.tensor(train_audio_cls_attn[indices]).to('cuda').view(-1,256,1)  # shape [top_k, 256, 1]
-            col_attention_scores = torch.tensor(val_audio_cls_attn[val_idx]).to('cuda').view(0,1,256)  # shape [1, 1, 256]
+            row_attention_scores = torch.from_numpy(train_audio_cls_attn[neighbors]).to('cuda').view(-1,256,1)  # shape [top_k, 256, 1]
+            col_attention_scores = torch.from_numpy(val_audio_cls_attn[val_idx]).to('cuda').view(1,1,256)  # shape [1, 1, 256]
             similarity_matrices = similarity_matrices * row_attention_scores * col_attention_scores 
             final_scores = similarity_matrices.sum(dim=(1,2))  # [top_k]
             re_ranked_scores, indices = final_scores.sort(descending=True) # Re-ranking based on final scores
             for sorted_idx in indices[:5]:
-                neighbor_index = neighbors[sorted_idx]
+                neighbor_idx = neighbors[sorted_idx]
                 train_audio = train_audio_paths[neighbor_idx]
                 train_caption = train_sentences[neighbor_idx]
                 similar_pairs.append([train_audio, train_caption])

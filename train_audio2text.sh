@@ -16,7 +16,7 @@ fi
 # Check if there is only 1 GPU in CUDA_VISIBLE_DEVICES
 if [ "$NUM_GPUS" -eq 1 ]; then
     MULTI_GPU=""
-    MIXED_PRECISION="--mixed_precision no"
+    MIXED_PRECISION="--mixed_precision bf16"
 else
     MULTI_GPU="--multi_gpu"
     MIXED_PRECISION="--mixed_precision no"

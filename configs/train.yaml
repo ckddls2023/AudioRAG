@@ -9,8 +9,8 @@ train_jsons: [
   #"data/json_files/Auto_ACD/train.json",
 ]
 val_jsons: [
-  # "data/json_files/AudioSet/val.json",
-  "data/json_files/Clotho/val.json",
+  "data/json_files/AudioSet/val.json",
+  #"data/json_files/Clotho/val.json",
   #"data/json_files/MACS/val.json",
   #"data/json_files/Auto_ACD/val.json",
 ]
@@ -42,22 +42,21 @@ data_args:
 
 model_args:
   name: "CLAP2LLAMA"
-  retr_prompt: ""
-  task_prompt: ""
-  caption_prompt : ""
-  #retr_prompt: 'Here are might be similar audio and caption pairs.'
-  # retr_prompt: ''
-  #retr_prompt: "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\nUSER: "
-  #task_prompt: 'Describe this Audio briefly.'
-  #task_prompt: "Briefly describe this Audio. Answer simple, short. Audio: "
+  #retr_prompt: ""
+  #task_prompt: ""
   #caption_prompt : ""
+  retr_prompt: 'These are similar audio and caption pairs.'
+  #retr_prompt: "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n\nUSER: "
+  task_prompt: 'Describe this Audio briefly.'
+  #task_prompt: "Briefly describe this Audio. Answer simple, short. Audio: "
+  caption_prompt : ""
   freeze_am: True
   # unfreeze_am: []
   unfreeze_am: ["linear_a_q","linear_b_q","linear_a_v","linear_b_v"]
   freeze_lm: False
   freeze_align: False
   #checkpoint_path: "./finetuned_models/audio2audio_MLP/" # 32, 16
-  checkpoint_path: "./finetuned_models/audio2audio_MLP_20epoch/"
+  #checkpoint_path: "./finetuned_models/audio2audio_MLP_20epoch/"
   #checkpoint_path: "./finetuned_models/frame2audio_MLP/"
   #checkpoint_path: "./finetuned_models/finetuned_MLP_IA3/"
   #checkpoint_path: "./finetuned_models/audio2audio_MLP_audiocaps_only/"
@@ -74,7 +73,7 @@ model_args:
   #checkpoint_path: "./finetuned_models/finetuned_MLP_clotho9x_audiosep2/"
   #checkpoint_path: "./finetuned_models/finetuned_MLP_AutoACD_5epoch/" # 16, 16
   #checkpoint_path: "./finetuned_models/finetuned_MLP_AutoACD_6epoch_IA3_unfuse/"
-  #checkpoint_path: "./finetuned_models/finetuned_MLP_lora_frozen/" # 16, 16
+  checkpoint_path: "./finetuned_models/finetuned_MLP_lora_frozen/" # 16, 16
   #checkpoint_path: "./pretrained_models/pretrained_MLP/" # 32, 16
   #checkpoint_path: "./pretrained_models/pretrained_MLP_clap_lora_AutoACD/" # 16, 16
   #checkpoint_path: "./pretrained_models/pretrained_MLP_clap_lora/" # 16, 16
@@ -161,7 +160,8 @@ index_args:
   #index_path: "./data/index/final_index_big_kb_sep_audiocaps_noisy_version/audio2audio_val_sep.json"
   #index_path: "./data/index/final_index_only_audiocaps/audio2audio_val.json"
   #index_path: "./data/index/final_index_only_clotho/audio2audio_val.json"
-  index_path: "./data/index/final_index_Qclotho_KBbigMixed/audio2mixed_val.json"
+  #index_path: "./data/index/final_index_Qclotho_KBbigMixed/audio2mixed_val.json"
+  index_path: "./data/index/final_atc_lm_attn/audiocaps_clotho_audio2audio_rerank_largeKB.json" 
   #index_path: "./data/index/audiocaps_clotho_sentence_embed.json"
   #index_path: "./data/index/AutoACD_macs_sentence_embed.json"
   #index_path: "./data/index/final_index_QcapsVal_KBacdTrain/audio2audio_val.json"
