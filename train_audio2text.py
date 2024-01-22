@@ -69,7 +69,7 @@ def train(
         retr_captions,
         lm_attn
     ) in enumerate(pbar := tqdm(dataloader, total=len(dataloader))):
-        lm_attn = torch.tensor(lm_attn).to(device=accelerator.device, dtype=torch.float, non_blocking=True)
+        # lm_attn = torch.tensor(lm_attn).to(device=accelerator.device, dtype=torch.float, non_blocking=True)
         iter_time = time.time() - start_time
         with accelerator.accumulate(model):
             optimizer.zero_grad()
@@ -79,7 +79,7 @@ def train(
                 text_embed = text_encoder.encode(
                     caption, normalize_embeddings=True, convert_to_tensor=True
                 )
-                output = model(audio_embed, text_embed, lm_attn=lm_attn)
+                output = model(audio_embed, text_embed, lm_attn=None)
             accelerator.backward(output["loss"])
             if accelerator.sync_gradients:
                 accelerator.clip_grad_norm_(model.parameters(), max_grad)  # 1.0
@@ -107,7 +107,7 @@ def main():
         config=OmegaConf.to_container(config, resolve=True, throw_on_missing=True),
         init_kwargs={"wandb": {"name": exp_name}},
     )
-    config.optim_args.lr = 1e-3 # Language Bind 5e-4, LiT 1e-3 -> 5e-5 -> 1e-5
+    config.optim_args.lr = 1e-4 # Language Bind 5e-4, LiT 1e-3 -> 5e-5 -> 1e-5
     config.optim_args.weight_decay = 0.01 # Language Bind 0.2, LiT 1e-4
     config.index_args.index_path = ""
     config.index_args.top_k = 0
@@ -121,14 +121,14 @@ def main():
     ]
     config.data_args.global_batch_size = 4096 # 1024 Global batch size
     config.data_args.batch_size = 128  # 1024 Global batch size
-    config.training.output_path = "./retriever_models_lm_attn2/"
-    # config.model_args.unfreeze_am = [
-    #     "linear_a_q",
-    #     "linear_b_q",
-    #     "linear_a_v",
-    #     "linear_b_v",
-    # ]  # Always finetune
-    config.model_args.unfreeze_am = []  # Always finetune
+    config.training.output_path = "./retriever_models_lm_attn3/"
+    config.model_args.unfreeze_am = [
+        "linear_a_q",
+        "linear_b_q",
+        "linear_a_v",
+        "linear_b_v",
+    ]  # Always finetune
+    # config.model_args.unfreeze_am = []  # Always finetune
     config.model_args.encoder.use_lora = True
     config.model_args.checkpoint_path = (
         "./pretrained_models/pretrained_MLP_clap_lora_AutoACD/"
@@ -140,16 +140,16 @@ def main():
     )
     encoder_config.spec_augment = False
     audio_encoder = CLAPAudioTower(encoder_config)
-    # for name, p in audio_encoder.named_parameters():
-    #     p.requires_grad = False
-    #     if any(prefix in name for prefix in config.model_args.unfreeze_am):
-    #         p.requires_grad = True
-    # total_params = 0
-    # for param in audio_encoder.parameters():
-    #     if param.requires_grad:
-    #         num_params = param.numel()
-    #         total_params += num_params
-    # print("Total trainable parameters:", total_params)
+    for name, p in audio_encoder.named_parameters():
+        p.requires_grad = False
+        if any(prefix in name for prefix in config.model_args.unfreeze_am):
+            p.requires_grad = True
+    total_params = 0
+    for param in audio_encoder.parameters():
+        if param.requires_grad:
+            num_params = param.numel()
+            total_params += num_params
+    print("Total trainable parameters:", total_params)
     accelerator.gradient_accumulation_steps = config.data_args.global_batch_size // (
         config.data_args.batch_size * accelerator.state.num_processes
     )
@@ -159,7 +159,7 @@ def main():
     if os.path.exists(audio_encoder_ckpt):
         audio_encoder.load_state_dict(torch.load(audio_encoder_ckpt), strict=False)
     audio_encoder = audio_encoder.to(accelerator.device)
-    audio_encoder.eval()
+    # audio_encoder.eval()
     train_dataloader = pretrain_dataloader(
         config,
         subset="train_jsons",
@@ -173,14 +173,25 @@ def main():
     )
     # align_model = align2text(hidden_size=768, num_latents=64, num_layers=2)
     align_model = align2text(hidden_size=768, num_latents=64, num_layers=1) # lm_attn2
-    # align_model_ckpt = os.path.join("./retriever_models_lm_attn","epoch_15.pt")
-    # if os.path.exists(align_model_ckpt):
-    #     print("===Reload Audio-Text alignment network===")
-    #     align_model.load_state_dict(torch.load(align_model_ckpt), strict=True)
-    # combined_parameters = [p for p in audio_encoder.parameters() if p.requires_grad] + \
-    #                   [p for p in align_model.parameters() if p.requires_grad]
+    align_model_ckpt = os.path.join("./retriever_models_lm_attn2","epoch_12.pt")
+    if os.path.exists(align_model_ckpt):
+        print("===Reload Audio-Text alignment network===")
+        align_model.load_state_dict(torch.load(align_model_ckpt), strict=True)
+    combined_parameters = [
+        {
+            'params': [p for p in audio_encoder.parameters() if p.requires_grad], 
+            'lr': config.optim_args.lr / 10,
+            'weight_decay': config.optim_args.weight_decay
+        },
+        {
+            'params': [p for p in align_model.parameters() if p.requires_grad], 
+            'lr': config.optim_args.lr,
+            'weight_decay': 1e-4
+        }
+    ]
     optimizer = optim.AdamW(
-        align_model.parameters(),
+        # align_model.parameters(),
+        combined_parameters,
         lr=config.optim_args.lr,
         betas=config.optim_args.betas,
         eps=config.optim_args.eps,

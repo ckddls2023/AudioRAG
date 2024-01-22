@@ -28,7 +28,7 @@ def load_json_file(files, blacklist=None, train=True):
         parent_path = os.path.basename(os.path.dirname(file))  # Extracts the parent directory name
         with open(file, "r") as f:
             json_obj = json.load(f)
-            for i, item in enumerate(json_obj["data"][:1558000]):
+            for i, item in enumerate(json_obj["data"]):
                 item["embedding_path"] = f"./data/embeddings/{parent_path}/{i:07d}.npy"
                 if "FreeSound" in file and blacklist:
                     if item["id"] in blacklist["FreeSound"]:
@@ -99,7 +99,7 @@ class AudioLanguagePretrainDataset(Dataset):
         item = self.json_data[index]
         wav_path = item["audio"]
         embedding_path = item["embedding_path"]
-        embedding = np.load(embedding_path)
+        # embedding = np.load(embedding_path)
         duration = item["duration"]
         audio_feature = self.preprocess_waveform(wav_path, duration, fuse=True) # Always not fuse it's feature
         caption = item["caption"]
@@ -121,7 +121,7 @@ class AudioLanguagePretrainDataset(Dataset):
             #     selected_items[i] = random_item
             retr_audio_features = [self.preprocess_waveform(retr_wav_path, duration) for (retr_wav_path, caption) in selected_items]
             retr_captions = [text_preprocess(caption) for (retr_wav_path, caption) in selected_items]
-        return audio_feature, caption, wav_path, retr_audio_features, retr_captions, embedding
+        return audio_feature, caption, wav_path, retr_audio_features, retr_captions, embedding_path
 
 
 def pretrain_dataloader(config,

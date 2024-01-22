@@ -12,8 +12,8 @@ from find_similar_sentences import encode_texts, encode_audio
 device = torch.device('cuda:0')
 
 # Load the model : Laion-CLAP
-# model = laion_clap.CLAP_Module(enable_fusion=False, device=device)
-# model.load_ckpt()
+model = laion_clap.CLAP_Module(enable_fusion=False, device=device)
+model.load_ckpt()
 
 text_encoder = SentenceTransformer("all-mpnet-base-v2")
 encoder_config = {
@@ -32,7 +32,7 @@ encoder_config = CLAPEncoderConfig.from_dict(encoder_config)
 audio_encoder = CLAPAudioTower(encoder_config)
 align_model = align2text(hidden_size=768, num_latents=64, num_layers=1)
 checkpoint_path =  "./retriever_models_lm_attn2/"
-align_model_ckpt = os.path.join(checkpoint_path, "epoch_7.pt")
+align_model_ckpt = os.path.join(checkpoint_path, "epoch_12.pt")
 # align_model = align2text(hidden_size=768, num_latents=64, num_layers=2)
 # checkpoint_path = "./retriever_models_lm_attn/"
 # align_model_ckpt = os.path.join(checkpoint_path, "epoch_5.pt")
@@ -66,10 +66,10 @@ with torch.no_grad():
     ground_truth = torch.tensor(ground_truth_idx).view(-1, 1)
 
     all_texts = ["This is a sound of " + t for t in class_index_dict.keys()]
-    # text_embed = model.get_text_embedding(all_texts)
-    # audio_embed = model.get_audio_embedding_from_filelist(x=audio_files)
-    text_embed = encode_texts(text_encoder, align_model, all_texts)
-    audio_embed, _, _ = encode_audio(audio_encoder, align_model, audio_files)
+    text_embed = model.get_text_embedding(all_texts)
+    audio_embed = model.get_audio_embedding_from_filelist(x=audio_files)
+    # text_embed = encode_texts(text_encoder, align_model, all_texts)
+    # audio_embed, _, _ = encode_audio(audio_encoder, align_model, audio_files)
     
     # Load the model : Ours
 

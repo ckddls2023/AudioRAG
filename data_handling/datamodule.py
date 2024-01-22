@@ -108,6 +108,6 @@ def collate_fn(batch):
     else:
         retr_audio_features = []
         retr_captions = []
-    embeddings = np.stack(embeddings)
-    embeddings = torch.from_numpy(embeddings)
+    # embeddings = np.stack(embeddings)
+    # embeddings = torch.from_numpy(embeddings)
     return audio_features, captions, audio_paths, retr_audio_features, retr_captions, embeddings

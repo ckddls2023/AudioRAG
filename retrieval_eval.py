@@ -12,6 +12,10 @@ from find_similar_sentences import encode_texts, encode_audio
 
 device = torch.device('cuda:0')
 
+# Load the model : Laion-CLAP
+# model = laion_clap.CLAP_Module(enable_fusion=False, device=device)
+# model.load_ckpt()
+
 text_encoder = SentenceTransformer("all-mpnet-base-v2")
 encoder_config = {
     "model_name": "CLAPAudioEncoder",
@@ -29,7 +33,7 @@ encoder_config = CLAPEncoderConfig.from_dict(encoder_config)
 audio_encoder = CLAPAudioTower(encoder_config)
 align_model = align2text(hidden_size=768, num_latents=64, num_layers=1)
 checkpoint_path =  "./retriever_models_lm_attn2/"
-align_model_ckpt = os.path.join(checkpoint_path, "epoch_7.pt")
+align_model_ckpt = os.path.join(checkpoint_path, "epoch_12.pt")
 # align_model = align2text(hidden_size=768, num_latents=64, num_layers=2)
 # checkpoint_path = "./retriever_models_lm_attn/"
 # align_model_ckpt = os.path.join(checkpoint_path, "epoch_5.pt")
@@ -48,8 +52,8 @@ audio_encoder.eval()
 align_model.eval()
 
 val_jsons = [
-    "data/json_files/AudioSet/val.json",
-    # "data/json_files/AudioSet/test.json",
+    # "data/json_files/AudioSet/val.json",
+    "data/json_files/AudioSet/test.json",
     # "data/json_files/Clotho/val.json",
     # "data/json_files/Auto_ACD/val.json",
     # "data/json_files/MACS/val.json",
@@ -78,8 +82,8 @@ ground_truth_idx = [[i]*sentence_count for i, sentence_count in enumerate(senten
 with torch.no_grad():
     expanded_ground_truth = torch.tensor(ground_truth_idx).flatten()
 
-    # text_embed = model.get_text_embedding(all_texts)
-    # audio_embed = model.get_audio_embedding_from_filelist(x=audio_files)
+    # text_embed = model.get_text_embedding(val_sentences)
+    # audio_embed = model.get_audio_embedding_from_filelist(x=val_audio_paths)
     text_embed = encode_texts(text_encoder, align_model, val_sentences)
     audio_embed, _, _ = encode_audio(audio_encoder, align_model, val_audio_paths)
     print(text_embed.shape)
