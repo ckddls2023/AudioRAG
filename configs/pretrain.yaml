@@ -2,16 +2,18 @@ exp_name: 'pretrain'
 seed: 20
 
 train_jsons: [
-  #'data/json_files/BBC_Sound_Effects/bbc_final.json',
-  #'data/json_files/FreeSound/fsd_final.json',
-  #'data/json_files/SoundBible/sb_final.json',
+  'data/json_files/BBC_Sound_Effects/bbc_final.json',
+  'data/json_files/FreeSound/fsd_final.json',
+  'data/json_files/SoundBible/sb_final.json',
+  "data/json_files/AudioSet/train.json",
+  "data/json_files/Clotho/train.json",
   #"data/json_files/AudioSet_SL/as_final.json",
   "data/json_files/Auto_ACD/train.json"
 ]
 val_jsons: [
-  #"data/json_files/AudioSet/val.json",
+  "data/json_files/AudioSet/val.json",
   #"data/json_files/Clotho/val.json",
-  "data/json_files/Auto_ACD/val.json"
+  # "data/json_files/Auto_ACD/val.json"
 ]
 blacklist: "data/json_files/blacklist/blacklist_exclude_test_ac.json"
 # dataset == 'AudioCaps': sampling_rate = 32000
@@ -34,7 +36,7 @@ audio_args:
 data_args:
   dataset: "Clotho"
   global_batch_size: 256
-  batch_size: 16
+  batch_size: 2
   num_workers: 16
 
 model_args:
@@ -62,8 +64,9 @@ model_args:
   #checkpoint_path: "./pretrained_models/pretrained_MLP_15epoch_w16_s16/"
   #checkpoint_path: "./pretrained_models/pretrained_MLP_clap_lora/"
   #checkpoint_path: "./pretrained_models/pretrained_MLP_clap_lora_prompt/"
-  checkpoint_path: "./pretrained_models/pretrained_MLP_clap_lora_AutoACD/"
-  #checkpoint_path: ""
+  #checkpoint_path: "./pretrained_models/pretrained_MLP_clap_lora_AutoACD/"
+  #checkpoint_path: "./pretrained_models/encoder_whisper_LLAMA/"
+  checkpoint_path: ""
   encoder:
     model_name: "CLAPAudioEncoder"
     pretrained: True
@@ -89,10 +92,10 @@ optim_args:
 
 training:
   warmup_epochs: 1
-  epochs: 5
+  epochs: 4
   clip_grad: 1
-  output_path: "./pretrained_models/pretrained_Qformer"
-  eval: True
+  output_path: "./pretrained_models/encoder_whisper_LLAMA/"
+  eval: False
   validate: False
 
 index_args:

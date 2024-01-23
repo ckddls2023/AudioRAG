@@ -8,6 +8,7 @@ from sentence_transformers import SentenceTransformer
 from models.align2text import align2text
 from models.audio_encoder import CLAPAudioTower, CLAPEncoderConfig
 from find_similar_sentences import encode_texts, encode_audio
+from peft import LoraConfig, TaskType, IA3Config, get_peft_model, get_peft_model_state_dict, PeftModel, PeftConfig, PromptEncoderConfig, AdaptionPromptConfig
 
 device = torch.device('cuda:0')
 
@@ -31,8 +32,23 @@ encoder_config = {
 encoder_config = CLAPEncoderConfig.from_dict(encoder_config)
 audio_encoder = CLAPAudioTower(encoder_config)
 align_model = align2text(hidden_size=768, num_latents=64, num_layers=1)
-checkpoint_path =  "./retriever_models_lm_attn2/"
-align_model_ckpt = os.path.join(checkpoint_path, "epoch_12.pt")
+# checkpoint_path =  "./retriever_models_lm_attn4/"
+# align_model_ckpt = os.path.join(checkpoint_path, "epoch_3.pt")
+# sentence_peft_config = {
+#     'r': 16,
+#     'lora_alpha': 16,
+#     'lora_dropout': 0.1,
+#     'bias': "none",
+#     'task_type': "MPNetForMaskedLM",
+#     'modules_to_save': [],
+#     'target_modules': ["attn.q", "attn.k", "attn.v","attn.o","pooler.dense"]
+# }
+# peft_config = LoraConfig(**sentence_peft_config)
+# text_encoder[0].auto_model = PeftModel.from_pretrained(text_encoder[0].auto_model, checkpoint_path, config=peft_config)  # suppose don't use get_peft_model
+checkpoint_path =  "./retriever_models_lm_attn3/"
+align_model_ckpt = os.path.join(checkpoint_path, "epoch_3.pt")
+# checkpoint_path =  "./retriever_models_lm_attn2/"
+# align_model_ckpt = os.path.join(checkpoint_path, "epoch_12.pt")
 # align_model = align2text(hidden_size=768, num_latents=64, num_layers=2)
 # checkpoint_path = "./retriever_models_lm_attn/"
 # align_model_ckpt = os.path.join(checkpoint_path, "epoch_5.pt")

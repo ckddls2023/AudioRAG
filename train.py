@@ -15,12 +15,12 @@ from utils import setup_seed, AverageMeter, decode_output
 import transformers
 from data_handling.pretrain_dataset import pretrain_dataloader
 from accelerate import Accelerator, DistributedDataParallelKwargs
-from models.audio_caption import CLAP2LLAMA
+from models.audio_caption import CLAP2LLAMA, SALMONN
 import evaluate
 from metrics import SpiceMetric, CocoTokenizer, CiderMetric
 
 warnings.simplefilter("ignore", UserWarning)
-ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=False, static_graph=False)
+ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True, static_graph=False)
 accelerator = Accelerator(gradient_accumulation_steps=8, log_with="wandb", kwargs_handlers=[ddp_kwargs], even_batches=True)
 
 
@@ -42,8 +42,7 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0):
         with accelerator.accumulate(model):
             optimizer.zero_grad()
             step = len(dataloader) * (epoch - 1) + batch_id
-            with accelerator.autocast():
-                output = model(audio, caption, retr_audios=retr_audios, retr_captions=retr_captions)
+            output = model(audio, caption, retr_audios=retr_audios, retr_captions=retr_captions)
             accelerator.backward(output["loss"])
             if accelerator.sync_gradients:
                 accelerator.clip_grad_norm_(model.parameters(), max_grad) # 1.0
@@ -120,7 +119,11 @@ def main():
         config=OmegaConf.to_container(config, resolve=True, throw_on_missing=True),
         init_kwargs={"wandb": {"name": exp_name}}
     )
-    model = CLAP2LLAMA(config.model_args)
+    model = SALMONN(
+        whisper_path = "/home/ckddls1321/.cache/checkpoints/whisper/",
+        beats_path = "/home/ckddls1321/.cache/checkpoints/beats/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt",
+        vicuna_path = "/home/ckddls1321/.cache/checkpoints/vicuna_13B/"
+    )
     accelerator.gradient_accumulation_steps = config.data_args.global_batch_size // (config.data_args.batch_size*accelerator.state.num_processes)
     if config.model_args.checkpoint_path:
         model.load_ckpt(config.model_args.checkpoint_path)

@@ -6,6 +6,7 @@ import math
 import time
 import torch
 import json
+import sys
 import numpy as np
 from torch.utils.data import Dataset
 from torch import optim
@@ -22,6 +23,7 @@ from metrics import SpiceMetric, CocoTokenizer, CiderMetric
 from sentence_transformers import SentenceTransformer
 from models.align2text import align2text
 from models.audio_encoder import CLAPAudioTower, CLAPEncoderConfig
+from peft import LoraConfig, TaskType, IA3Config, get_peft_model, get_peft_model_state_dict, PeftModel, PeftConfig, PromptEncoderConfig, AdaptionPromptConfig
 
 warnings.simplefilter("ignore", UserWarning)
 ddp_kwargs = DistributedDataParallelKwargs(
@@ -107,7 +109,7 @@ def main():
         config=OmegaConf.to_container(config, resolve=True, throw_on_missing=True),
         init_kwargs={"wandb": {"name": exp_name}},
     )
-    config.optim_args.lr = 1e-4 # Language Bind 5e-4, LiT 1e-3 -> 5e-5 -> 1e-5
+    config.optim_args.lr = 5e-4 # Language Bind 5e-4, LiT 1e-3 -> 5e-5 -> 1e-5
     config.optim_args.weight_decay = 0.01 # Language Bind 0.2, LiT 1e-4
     config.index_args.index_path = ""
     config.index_args.top_k = 0
@@ -121,7 +123,7 @@ def main():
     ]
     config.data_args.global_batch_size = 4096 # 1024 Global batch size
     config.data_args.batch_size = 128  # 1024 Global batch size
-    config.training.output_path = "./retriever_models_lm_attn3/"
+    config.training.output_path = "./retriever_models_lm_attn4/"
     config.model_args.unfreeze_am = [
         "linear_a_q",
         "linear_b_q",
@@ -173,13 +175,31 @@ def main():
     )
     # align_model = align2text(hidden_size=768, num_latents=64, num_layers=2)
     align_model = align2text(hidden_size=768, num_latents=64, num_layers=1) # lm_attn2
-    align_model_ckpt = os.path.join("./retriever_models_lm_attn2","epoch_12.pt")
-    if os.path.exists(align_model_ckpt):
-        print("===Reload Audio-Text alignment network===")
-        align_model.load_state_dict(torch.load(align_model_ckpt), strict=True)
+    # align_model_ckpt = os.path.join("./retriever_models_lm_attn2","epoch_12.pt")
+    # if os.path.exists(align_model_ckpt):
+    #     print("===Reload Audio-Text alignment network===")
+    #     align_model.load_state_dict(torch.load(align_model_ckpt), strict=False)
+    text_encoder = SentenceTransformer("all-mpnet-base-v2", device="cuda")
+    sentence_peft_config = {
+        'r': 16,
+        'lora_alpha': 16,
+        'lora_dropout': 0.1,
+        'bias': "none",
+        'task_type': "MPNetForMaskedLM",
+        'modules_to_save': [],
+        'target_modules': ["attn.q", "attn.k", "attn.v","attn.o","pooler.dense"]
+    }
+    peft_config = LoraConfig(**sentence_peft_config)
+    text_encoder[0].auto_model = get_peft_model(text_encoder[0].auto_model, peft_config)
+    text_encoder[0].auto_model.print_trainable_parameters() # Should be below 1%... otherwise, embed_token or lm_head saved
     combined_parameters = [
         {
             'params': [p for p in audio_encoder.parameters() if p.requires_grad], 
+            'lr': config.optim_args.lr / 10,
+            'weight_decay': config.optim_args.weight_decay
+        },
+        {
+            'params': [p for p in text_encoder[0].auto_model.parameters() if p.requires_grad], 
             'lr': config.optim_args.lr / 10,
             'weight_decay': config.optim_args.weight_decay
         },
@@ -211,8 +231,6 @@ def main():
     scheduler = transformers.get_cosine_schedule_with_warmup(
         optimizer, warmup_steps, train_steps
     )
-    text_encoder = SentenceTransformer("all-mpnet-base-v2", device="cuda")
-    text_encoder.eval()
     train_dataloader, align_model, optimizer, scheduler = accelerator.prepare(
         train_dataloader, align_model, optimizer, scheduler
     )
@@ -241,6 +259,7 @@ def main():
                 audio_encoder.state_dict(),
                 os.path.join(config.training.output_path, "audio_encoder.bin"),
             )
+            text_encoder[0].auto_model.save_pretrained(config.training.output_path)
         accelerator.wait_for_everyone()
     accelerator.end_training()
 

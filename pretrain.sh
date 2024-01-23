@@ -23,7 +23,7 @@ else
     MIXED_PRECISION="--mixed_precision bf16"
 fi
 
-accelerate launch --num_processes $NUM_GPUS --num_machines $NUM_HOSTS $MULTI_GPU $MIXED_PRECISION --machine_rank 0 --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT train.py --config configs/pretrain.yaml
+accelerate launch --config_file config.yaml --machine_rank 0 --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT train.py --config configs/pretrain.yaml
 
 # For Multi-node
 #SSH='ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no $hostn'

@@ -1,12 +1,7 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# @Author  : Xinhao Mei @CVSSP, University of Surrey
-# @E-mail  : x.mei@surrey.ac.uk
-
-
 import json
 import random
 import librosa
+import soundfile as sf
 import torch
 import os
 import numpy as np
@@ -28,7 +23,7 @@ def load_json_file(files, blacklist=None, train=True):
         parent_path = os.path.basename(os.path.dirname(file))  # Extracts the parent directory name
         with open(file, "r") as f:
             json_obj = json.load(f)
-            for i, item in enumerate(json_obj["data"]):
+            for i, item in enumerate(json_obj["data"][:500000]):
                 item["embedding_path"] = f"./data/embeddings/{parent_path}/{i:07d}.npy"
                 if "FreeSound" in file and blacklist:
                     if item["id"] in blacklist["FreeSound"]:
@@ -63,6 +58,16 @@ class AudioLanguagePretrainDataset(Dataset):
 
     def __len__(self):
         return len(self.json_data)
+    
+    def read_wav(self, wav_path):
+        wav, sr = sf.read(wav_path)
+        if len(wav.shape) == 2:
+            wav = wav[:, 0]
+        if len(wav) > 30 * sr:
+            wav = wav[: 30 * sr]
+        if sr != 16000:
+            wav = librosa.resample(wav, orig_sr=sr, target_sr=16000, res_type="fft")
+        return wav
     
     def preprocess_waveform(self, wav_path, duration, fuse=True):
         waveform, sr = librosa.load(wav_path, sr=self.sr, duration=duration)
@@ -101,7 +106,8 @@ class AudioLanguagePretrainDataset(Dataset):
         embedding_path = item["embedding_path"]
         # embedding = np.load(embedding_path)
         duration = item["duration"]
-        audio_feature = self.preprocess_waveform(wav_path, duration, fuse=True) # Always not fuse it's feature
+        # audio_feature = self.preprocess_waveform(wav_path, duration, fuse=True) # Always not fuse it's feature
+        audio_feature = self.read_wav(wav_path) # Always not fuse it's feature
         caption = item["caption"]
         if self.train and isinstance(caption, list):
             caption = random.choice(item["caption"])
@@ -119,7 +125,8 @@ class AudioLanguagePretrainDataset(Dataset):
             #     other_key = random.choice([k for k in self.retrieve_map.keys() if k != wav_path])
             #     random_item = random.choice(self.retrieve_map[other_key])
             #     selected_items[i] = random_item
-            retr_audio_features = [self.preprocess_waveform(retr_wav_path, duration) for (retr_wav_path, caption) in selected_items]
+            # retr_audio_features = [self.preprocess_waveform(retr_wav_path, duration) for (retr_wav_path, caption) in selected_items]
+            retr_audio_features = [self.read_wav(retr_wav_path) for (retr_wav_path, caption) in selected_items]
             retr_captions = [text_preprocess(caption) for (retr_wav_path, caption) in selected_items]
         return audio_feature, caption, wav_path, retr_audio_features, retr_captions, embedding_path
 
