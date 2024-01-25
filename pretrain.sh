@@ -21,9 +21,12 @@ if [ "$NUM_GPUS" -eq 1 ]; then
 else
     MULTI_GPU="--multi_gpu"
     MIXED_PRECISION="--mixed_precision bf16"
+    #MIXED_PRECISION="--mixed_precision fp16"
 fi
 
 accelerate launch --config_file config.yaml --machine_rank 0 --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT train.py --config configs/pretrain.yaml
+# accelerate launch --config_file fsdp_config.yaml --machine_rank 0 --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT train.py --config configs/pretrain.yaml
+#accelerate launch --config_file deepspeed_config.yaml --machine_rank 0 --main_process_ip $MASTER_ADDR --main_process_port $MASTER_PORT train.py --config configs/pretrain.yaml
 
 # For Multi-node
 #SSH='ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no $hostn'

@@ -14,12 +14,17 @@ from tqdm import tqdm
 from utils import setup_seed, AverageMeter, decode_output
 import transformers
 from data_handling.pretrain_dataset import pretrain_dataloader
-from accelerate import Accelerator, DistributedDataParallelKwargs
+from accelerate import Accelerator, DistributedDataParallelKwargs, FullyShardedDataParallelPlugin
+from deepspeed import DeepSpeedEngine
 from models.audio_caption import CLAP2LLAMA, SALMONN
 import evaluate
 from metrics import SpiceMetric, CocoTokenizer, CiderMetric
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictType, FullStateDictConfig
 
 warnings.simplefilter("ignore", UserWarning)
+# fsdp_plugin = FullyShardedDataParallelPlugin(
+#     state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
+# )
 ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True, static_graph=False)
 accelerator = Accelerator(gradient_accumulation_steps=8, log_with="wandb", kwargs_handlers=[ddp_kwargs], even_batches=True)
 
@@ -122,10 +127,11 @@ def main():
     model = SALMONN(
         whisper_path = "/home/ckddls1321/.cache/checkpoints/whisper/",
         beats_path = "/home/ckddls1321/.cache/checkpoints/beats/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt",
-        vicuna_path = "/home/ckddls1321/.cache/checkpoints/vicuna_13B/"
+        device = accelerator.device
     )
     accelerator.gradient_accumulation_steps = config.data_args.global_batch_size // (config.data_args.batch_size*accelerator.state.num_processes)
     if config.model_args.checkpoint_path:
+        # accelerator.load_state(config.training.output_path) # FSDP
         model.load_ckpt(config.model_args.checkpoint_path)
     train_dataloader = pretrain_dataloader(config, subset="train_jsons", bucket=False, is_distributed=False,num_tasks=1,global_rank=0,shuffle=True,retrieve_map=config.index_args.index_path,top_k=config.index_args.top_k)
     val_dataloader = pretrain_dataloader(config, subset="val_jsons", bucket=False, is_distributed=False, num_tasks=1,global_rank=0,shuffle=False,retrieve_map=config.index_args.index_path,top_k=config.index_args.top_k)
@@ -134,6 +140,7 @@ def main():
     train_steps = int(len(train_dataloader)*config.training.epochs/accelerator.gradient_accumulation_steps)
     scheduler = transformers.get_cosine_schedule_with_warmup(optimizer, warmup_steps, train_steps)
     train_dataloader, model, optimizer, scheduler = accelerator.prepare(train_dataloader, model, optimizer, scheduler)
+    print(model)
     spiders = []
     save_ckpt = accelerator.is_main_process
     if accelerator.state.mixed_precision == "no": # Ampere, Hopper
@@ -153,7 +160,24 @@ def main():
                 save_ckpt = metrics["spider"] >= max(spiders) 
         if save_ckpt: 
             unwrapped_model = accelerator.unwrap_model(model)
-            unwrapped_model.save_ckpt(config.training.output_path)
+            # accelerator.save_state(config.training.output_path) # FSDP, save all parmeter
+            if isinstance(model, FSDP):
+                full_state_dict_config = FullStateDictConfig(offload_to_cpu=False, rank0_only=True)
+                with FSDP.state_dict_type(unwrapped_model, StateDictType.FULL_STATE_DICT, full_state_dict_config):
+                    state = accelerator.get_state_dict(unwrapped_model.decoder_proj)
+                torch.save(state, os.path.join(config.training.output_path,"decoder_proj.bin"))
+                # unwrapped_model.decoder.save_pretrained( # Save PEFT model
+                #     config.training.output_path,
+                #     is_main_process=accelerator.is_main_process,
+                #     save_function=accelerator.save,
+                #     state_dict=accelerator.get_state_dict(model),
+                # )
+            elif isinstance(model, DeepSpeedEngine):
+                success = model.save_checkpoint(config.training.output_path, epoch, exclude_frozen_parameters=True)
+                if success:
+                    print("Deepspeed checkpoint has been succefully saved")
+            else:
+                unwrapped_model.save_ckpt(config.training.output_path)
         accelerator.wait_for_everyone()
     accelerator.end_training()
 

@@ -34,7 +34,7 @@ encoder_config = CLAPEncoderConfig.from_dict(encoder_config)
 audio_encoder = CLAPAudioTower(encoder_config)
 align_model = align2text(hidden_size=768, num_latents=64, num_layers=1)
 checkpoint_path =  "./retriever_models_lm_attn4/"
-align_model_ckpt = os.path.join(checkpoint_path, "epoch_3.pt")
+align_model_ckpt = os.path.join(checkpoint_path, "epoch_14.pt")
 sentence_peft_config = {
     'r': 16,
     'lora_alpha': 16,
@@ -100,8 +100,8 @@ with torch.no_grad():
 
     # text_embed = model.get_text_embedding(val_sentences)
     # audio_embed = model.get_audio_embedding_from_filelist(x=val_audio_paths)
-    text_embed = encode_texts(text_encoder, align_model, val_sentences)
-    audio_embed, _, _ = encode_audio(audio_encoder, align_model, val_audio_paths)
+    text_embed = encode_texts(text_encoder, align_model, val_sentences, batch_size=128)
+    audio_embed, _, _ = encode_audio(audio_encoder, align_model, val_audio_paths, batch_size=128)
     print(text_embed.shape)
     print(audio_embed.shape)
     

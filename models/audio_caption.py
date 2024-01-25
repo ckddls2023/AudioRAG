@@ -366,11 +366,12 @@ class SALMONN(nn.Module):
         self,
         whisper_path,
         beats_path,
-        vicuna_path,
+        device,
         second_per_frame=0.333333,
         second_stride=0.333333,
     ):
         super().__init__()
+        self.device = device
         
         # Encoder
         self.feature_extractor = WhisperFeatureExtractor.from_pretrained(whisper_path)
@@ -388,6 +389,7 @@ class SALMONN(nn.Module):
         self.beats.eval()
         self.second_per_frame = second_per_frame
         self.second_stride = second_stride
+        self.dtype = torch.bfloat16
         
         for name, p in self.beats.named_parameters():
             p.requires_grad = False
@@ -395,6 +397,7 @@ class SALMONN(nn.Module):
             p.requires_grad = False
         
         # decoder
+        # self.decoder = LlamaForCausalLM.from_pretrained("lmsys/vicuna-7b-v1.5")  # v1.5 : LLAMA2 + VICUNA
         self.decoder = LlamaForCausalLM.from_pretrained("lmsys/vicuna-7b-v1.5")  # v1.5 : LLAMA2 + VICUNA
         self.llama_tokenizer = LlamaTokenizer.from_pretrained("lmsys/vicuna-7b-v1.5", use_fast=False, add_eos_token=True,add_bos_token=False)
         num_new_tokens = self.llama_tokenizer.add_special_tokens({'pad_token': '[PAD]'})
@@ -431,13 +434,17 @@ class SALMONN(nn.Module):
             self.decoder.base_model.model.lm_head.weight.requires_grad = False # slightly finetune lm_head
             self.decoder.print_trainable_parameters() # Should be below 1%... otherwise, embed_token or lm_head saved
         
-    def save_ckpt(self, checkpoint_path):
+    def save_ckpt(self, checkpoint_path, use_fsdp=False):
         torch.save(self.decoder_proj.state_dict(), os.path.join(checkpoint_path,"decoder_proj.bin"))
+        torch.save(self.ln_speech.state_dict(), os.path.join(checkpoint_path,"ln_speech.bin"))
+        torch.save(self.ln_audio.state_dict(), os.path.join(checkpoint_path,"ln_audio.bin"))
         if not self.freeze_lm:
             self.decoder.save_pretrained(checkpoint_path)
             
-    def load_ckpt(self, checkpoint_path):
+    def load_ckpt(self, checkpoint_path, use_fsdp=False):
         self.decoder_proj.load_state_dict(torch.load(os.path.join(checkpoint_path,"decoder_proj.bin")), strict = True)
+        self.ln_speech.load_state_dict(torch.load(os.path.join(checkpoint_path,"ln_speech.bin")), strict = True)
+        self.ln_audio.load_state_dict(torch.load(os.path.join(checkpoint_path,"ln_audio.bin")), strict = True)
         if not self.freeze_lm and 'finetuned' in checkpoint_path:
             self.decoder = PeftModel.from_pretrained(self.decoder.base_model, checkpoint_path, config=self.peft_config)  # suppose don't use get_peft_model
             self.decoder.enable_adapter_layers()
@@ -456,9 +463,10 @@ class SALMONN(nn.Module):
         
     def encode_audio(self, wav):
         with torch.no_grad():
-            device = next(self.parameters()).device
+            device = self.device
             spectrogram = self.feature_extractor(wav, return_tensors="pt", sampling_rate=16000).input_features.to(device) # [1, 80, 3000]
-            speech_embeds = self.speech_encoder(spectrogram, return_dict=True).last_hidden_state
+            with torch.autocast(device_type="cuda", dtype=self.dtype):
+                speech_embeds = self.speech_encoder(spectrogram, return_dict=True).last_hidden_state
         
             # beats
             if isinstance(wav, list):
@@ -467,11 +475,13 @@ class SALMONN(nn.Module):
             else:
                 raw_wav = torch.from_numpy(wav).to(speech_embeds.device).unsqueeze(0)
             audio_padding_mask = torch.zeros(raw_wav.shape, device=speech_embeds.device).bool()
-            audio_embeds, _ = self.beats.extract_features(raw_wav, padding_mask=audio_padding_mask, feature_only=True)
+            with torch.autocast(device_type="cuda", dtype=self.dtype):
+                audio_embeds, _ = self.beats.extract_features(raw_wav, padding_mask=audio_padding_mask, feature_only=True)
 
             # auditory embeds
-            speech_embeds = self.ln_speech(speech_embeds)
-            audio_embeds = self.ln_audio(audio_embeds)
+            with torch.autocast(device_type="cuda"):
+                speech_embeds = self.ln_speech(speech_embeds.float())
+                audio_embeds = self.ln_audio(audio_embeds.float())
             audio_embeds = F.pad(audio_embeds, (0, 0, 0, speech_embeds.size(1) - audio_embeds.size(1)))
             speech_embeds = torch.cat([speech_embeds, audio_embeds], dim=-1)
             
@@ -509,7 +519,7 @@ class SALMONN(nn.Module):
         input_embeds = torch.cat((audio_embed, input_embeds), dim=1)
         shifted_input_ids, shifted_attn_mask = self.shift_and_pad_input(input_ids, attn_mask, audio_embed.shape[1])
         # | instruction <- here| audio | prompt <- here | caption | 
-        input_embeds, shifted_input_ids, shifted_attn_mask = self.insert_prompt("Describe this audio sound", input_embeds, shifted_input_ids, shifted_attn_mask)
+        input_embeds, shifted_input_ids, shifted_attn_mask = self.insert_prompt("Describe this audio sound ", input_embeds, shifted_input_ids, shifted_attn_mask)
         retr_nums = max(len(retr_audio_embeds), len(retr_captions))
         retr_nums = random.randint(0, retr_nums) # Randomly retreive
         for i in range(retr_nums): # Suppose we have only case ([],retr_captions), (retr_audio_embeds,[]), both pair with same length
@@ -536,17 +546,15 @@ class SALMONN(nn.Module):
         return output
     
     def forward(self, audio, caption, retr_audios=None, retr_captions=None):
-        with torch.no_grad():
-            audio_embed = self.encode_audio(audio)  # Only for LGTM # 
-        audio_embed_proj = self.decoder_proj(audio_embed)
-        retr_audio_embeds = []
-        if retr_audios:
-            for i, (retr_audio, retr_caption) in enumerate(zip(retr_audios, retr_captions)):
-                with torch.no_grad():
+        audio_embed = self.encode_audio(audio)  # Only for LGTM # 
+        with torch.autocast(device_type="cuda", dtype=self.dtype):
+            audio_embed_proj = self.decoder_proj(audio_embed)
+            retr_audio_embeds = []
+            if retr_audios:
+                for i, (retr_audio, retr_caption) in enumerate(zip(retr_audios, retr_captions)):
                     retr_embed = self.encode_audio(retr_audio)
-                retr_embed_proj = self.decoder_proj(retr_embed)
-                retr_audio_embeds.append(retr_embed_proj.detach())
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    retr_embed_proj = self.decoder_proj(retr_embed)
+                    retr_audio_embeds.append(retr_embed_proj.detach())
             output = self.forward_decoder(audio_embed_proj, caption, retr_audio_embeds, retr_captions)
         return output
         
@@ -554,25 +562,25 @@ class SALMONN(nn.Module):
         r"""Generate audio captions for each audio recording in a batch"""
         with torch.no_grad():
             audio_embed = self.encode_audio(audio) 
-            audio_embed_proj = self.decoder_proj(audio_embed)
+            input_embeds = self.decoder_proj(audio_embed) # [B,100,H]
+            batch_size, seq_length, _ = input_embeds.shape
+            shifted_attn_mask = input_embeds.new_ones((batch_size, seq_length)).long()
             retr_audio_embeds = []
             for i, (retr_audio, retr_caption) in enumerate(zip(retr_audios, retr_captions)): # Only LGTM needs retr_text, others ignore
                 retr_audio_embed = self.encode_audio(retr_audio) 
                 retr_audio_embed_proj = self.decoder_proj(retr_audio_embed)
                 retr_audio_embeds.append(retr_audio_embed_proj)
-            # input_embeds, _, shifted_attn_mask = self.insert_prompt(self.task_prompt, input_embeds, None, shifted_attn_mask)
+            input_embeds, _ , shifted_attn_mask = self.insert_prompt("Describe this audio sound ", input_embeds, None, shifted_attn_mask)
             retr_nums = max(len(retr_audio_embeds), len(retr_captions))
             for i in range(retr_nums): # Suppose we have only case ([],retr_captions), (retr_audio_embeds,[]), both pair with same length
                 if retr_captions: 
                     retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_captions[i], input_embeds.device, add_special_tokens=False)
                     input_embeds = torch.cat((self.get_decoder_embeddings()(retr_input_ids), input_embeds), dim=1) 
                     shifted_attn_mask = torch.cat((retr_attn_mask, shifted_attn_mask), dim=1)
-                    #input_embeds, _, shifted_attn_mask = self.insert_prompt("\nCaption: ", input_embeds, None, shifted_attn_mask)
                 if retr_audio_embeds: 
                     input_embeds = torch.cat((retr_audio_embeds[i], input_embeds), dim=1) 
                     retr_attn_mask = shifted_attn_mask.new_ones(retr_audio_embeds[i].size()[:2]) # B, prefix
                     shifted_attn_mask = torch.cat((retr_attn_mask, shifted_attn_mask), dim=1)
-                    #input_embeds, _, shifted_attn_mask = self.insert_prompt("\nAudio: ", input_embeds, None, shifted_attn_mask)
             # input_embeds, _, shifted_attn_mask = self.insert_prompt(self.retr_prompt, input_embeds, None, shifted_attn_mask)
             bos_token_embed = self.get_decoder_embeddings()(torch.tensor([self.llama_tokenizer.bos_token_id]).to(input_embeds.device))
             bos_token_embed = bos_token_embed.repeat(input_embeds.shape[0], 1, 1)
