@@ -82,7 +82,7 @@ class AudioLanguagePretrainDataset(Dataset):
                 temp_dict = {}
                 temp_dict = get_audio_features(
                     temp_dict, segment_tensor, max_length,
-                    data_truncating='fusion',
+                    data_truncating='rand_trunc',
                     data_filling='repeatpad',
                     audio_cfg=self.audio_cfg,
                     require_grad=False,
@@ -94,7 +94,7 @@ class AudioLanguagePretrainDataset(Dataset):
             temp_dict = {}
             temp_dict = get_audio_features(
                 temp_dict, audio_waveform, max_length,
-                data_truncating='fusion',
+                data_truncating='rand_trunc',
                 data_filling='repeatpad',
                 audio_cfg=self.audio_cfg,
                 require_grad=False,
@@ -127,7 +127,7 @@ class AudioLanguagePretrainDataset(Dataset):
             #     random_item = random.choice(self.retrieve_map[other_key])
             #     selected_items[i] = random_item
             retr_audio_features = [self.preprocess_waveform(retr_wav_path, duration) for (retr_wav_path, caption) in selected_items]
-            retr_audio_features = [self.read_wav(retr_wav_path) for (retr_wav_path, caption) in selected_items]
+            # retr_audio_features = [self.read_wav(retr_wav_path) for (retr_wav_path, caption) in selected_items]
             retr_captions = [text_preprocess(caption) for (retr_wav_path, caption) in selected_items]
         return audio_feature, caption, wav_path, retr_audio_features, retr_captions, embedding_path
 

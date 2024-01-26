@@ -18,6 +18,7 @@ import transformers
 from data_handling.pretrain_dataset import pretrain_dataloader
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from models.audio_caption import CLAP2LLAMA
+import laion_clap
 import evaluate
 from metrics import SpiceMetric, CocoTokenizer, CiderMetric
 from sentence_transformers import SentenceTransformer
@@ -51,8 +52,7 @@ def get_config():
 
 def train(
     model,
-    audio_encoder,
-    text_encoder,
+    clap_model,
     dataloader,
     optimizer,
     scheduler,
@@ -77,11 +77,18 @@ def train(
             optimizer.zero_grad()
             step = len(dataloader) * (epoch - 1) + batch_id
             with accelerator.autocast():
-                audio_embed = audio_encoder(audio).last_hidden_state  # B, 64, 768
-                text_embed = text_encoder.encode(
-                    caption, normalize_embeddings=True, convert_to_tensor=True
-                )
-                output = model(audio_embed, text_embed, lm_attn=None)
+                audio_embed = clap_model.model.get_audio_embedding(audio)
+                # text_embed = clap_model.get_text_embedding(caption)
+                retr_audio_embeds = []
+                retr_text_embeds = []
+                for retr_audio, retr_caption in zip(retr_audios, retr_captions):
+                    retr_audio_embed = clap_model.model.get_audio_embedding(retr_audio)
+                    retr_text_embed = clap_model.get_text_embedding(retr_caption, use_tensor=True)
+                    retr_audio_embeds.append(retr_audio_embed)
+                    retr_text_embeds.append(retr_text_embed)
+                retr_audio_embeds = torch.concat(retr_audio_embeds,dim=0)
+                retr_text_embeds = torch.concat(retr_text_embeds,dim=0)
+                output = model(audio_embed, retr_audio_embeds, retr_text_embeds)
             accelerator.backward(output["loss"])
             if accelerator.sync_gradients:
                 accelerator.clip_grad_norm_(model.parameters(), max_grad)  # 1.0
@@ -111,56 +118,56 @@ def main():
     )
     config.optim_args.lr = 5e-4 # Language Bind 5e-4, LiT 1e-3 -> 5e-5 -> 1e-5
     config.optim_args.weight_decay = 0.01 # Language Bind 0.2, LiT 1e-4
-    config.index_args.index_path = ""
-    config.index_args.top_k = 0
+    config.index_args.index_path = "./data/index/text2text/text2text_base.json"
+    config.index_args.top_k = 2
     config.training.epochs = 15 # 0.7 * 15 = 10.5M + 1.3M * 10 + 2M * 10
     config.train_jsons = [
-        "./data/json_files/AudioSet/train.json",  # 48K
-        "./data/json_files/Clotho/train.json",  # 6K
-        "./data/json_files/Auto_ACD/train.json",  # 1903803, 0.6M => 1.0M
-        # "./data/json_files/BBC_Sound_Effects/bbc_final.json",
-        # "./data/json_files/FreeSound/fsd_final.json",
+        "data/json_files/AudioSet/train.json",
+        "data/json_files/Clotho/train.json",
+        # "data/json_files/BBC_Sound_Effects/bbc_final.json",
+        # "data/json_files/FreeSound/fsd_final.json",
+        # "data/json_files/SoundBible/sb_final.json",
+        # "data/json_files/Auto_ACD/train.json",
+        # "data/json_files/MACS/val.json",
     ]
-    config.data_args.global_batch_size = 4096 # 1024 Global batch size
-    config.data_args.batch_size = 128  # 1024 Global batch size
-    config.training.output_path = "./retriever_models_lm_attn4/"
-    config.model_args.unfreeze_am = [
-        "linear_a_q",
-        "linear_b_q",
-        "linear_a_v",
-        "linear_b_v",
-    ]  # Always finetune
-    # config.model_args.unfreeze_am = []  # Always finetune
+    
+    clap_model = laion_clap.CLAP_Module(enable_fusion=False, amodel='HTSAT-base', device=accelerator.device)
+    clap_model.load_ckpt("/home/ckddls1321/.cache/checkpoints/music_speech_audioset_epoch_15_esc_89.98.pt")
+    clap_model = clap_model.to(accelerator.device)
+    clap_model.eval()
+    config.data_args.global_batch_size = 1024 # 1024 Global batch size
+    config.data_args.batch_size = 32  # 1024 Global batch size
+    config.training.output_path = "./retriever_models_t2t/"
     config.model_args.encoder.use_lora = True
     config.model_args.checkpoint_path = (
         "./pretrained_models/pretrained_MLP_clap_lora_AutoACD/"
     )
-    config.model_args.encoder.window_size = 4 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
-    config.model_args.encoder.step_size = 4
-    encoder_config = CLAPEncoderConfig.from_dict(
-        OmegaConf.to_container(config.model_args.encoder, resolve=True)
-    )
-    encoder_config.spec_augment = False
-    audio_encoder = CLAPAudioTower(encoder_config)
-    for name, p in audio_encoder.named_parameters():
-        p.requires_grad = False
-        if any(prefix in name for prefix in config.model_args.unfreeze_am):
-            p.requires_grad = True
-    total_params = 0
-    for param in audio_encoder.parameters():
-        if param.requires_grad:
-            num_params = param.numel()
-            total_params += num_params
-    print("Total trainable parameters:", total_params)
+    # config.model_args.encoder.window_size = 4 # (32,32) = [B,32,H], (16,16) = [B,64,H], (8,8) = [B,128,H] (4,4) = [B,256,H]
+    # config.model_args.encoder.step_size = 4
+    # encoder_config = CLAPEncoderConfig.from_dict(
+    #     OmegaConf.to_container(config.model_args.encoder, resolve=True)
+    # )
+    # encoder_config.spec_augment = False
+    # audio_encoder = CLAPAudioTower(encoder_config)
+    # for name, p in audio_encoder.named_parameters():
+    #     p.requires_grad = False
+    #     if any(prefix in name for prefix in config.model_args.unfreeze_am):
+    #         p.requires_grad = True
+    # total_params = 0
+    # for param in audio_encoder.parameters():
+    #     if param.requires_grad:
+    #         num_params = param.numel()
+    #         total_params += num_params
+    # print("Total trainable parameters:", total_params)
     accelerator.gradient_accumulation_steps = config.data_args.global_batch_size // (
         config.data_args.batch_size * accelerator.state.num_processes
     )
-    audio_encoder_ckpt = os.path.join(
-        config.model_args.checkpoint_path, "audio_encoder.bin"
-    )
-    if os.path.exists(audio_encoder_ckpt):
-        audio_encoder.load_state_dict(torch.load(audio_encoder_ckpt), strict=False)
-    audio_encoder = audio_encoder.to(accelerator.device)
+    # audio_encoder_ckpt = os.path.join(
+    #     config.model_args.checkpoint_path, "audio_encoder.bin"
+    # )
+    # if os.path.exists(audio_encoder_ckpt):
+    #     audio_encoder.load_state_dict(torch.load(audio_encoder_ckpt), strict=False)
+    # audio_encoder = audio_encoder.to(accelerator.device)
     # audio_encoder.eval()
     train_dataloader = pretrain_dataloader(
         config,
@@ -174,44 +181,43 @@ def main():
         top_k=config.index_args.top_k,
     )
     # align_model = align2text(hidden_size=768, num_latents=64, num_layers=2)
-    align_model = align2text(hidden_size=768, num_latents=64, num_layers=1) # lm_attn2
-    # align_model_ckpt = os.path.join("./retriever_models_lm_attn2","epoch_12.pt")
+    align_model = align2text(config.index_args.top_k) # new version
+    # align_model_ckpt = os.path.join("./retriever_models_t2t","epoch_12.pt")
     # if os.path.exists(align_model_ckpt):
     #     print("===Reload Audio-Text alignment network===")
     #     align_model.load_state_dict(torch.load(align_model_ckpt), strict=False)
-    text_encoder = SentenceTransformer("all-mpnet-base-v2", device="cuda")
-    sentence_peft_config = {
-        'r': 16,
-        'lora_alpha': 16,
-        'lora_dropout': 0.1,
-        'bias': "none",
-        'task_type': "MPNetForMaskedLM",
-        'modules_to_save': [],
-        'target_modules': ["attn.q", "attn.k", "attn.v","attn.o","pooler.dense"]
-    }
-    peft_config = LoraConfig(**sentence_peft_config)
-    text_encoder[0].auto_model = get_peft_model(text_encoder[0].auto_model, peft_config)
-    text_encoder[0].auto_model.print_trainable_parameters() # Should be below 1%... otherwise, embed_token or lm_head saved
-    combined_parameters = [
-        {
-            'params': [p for p in audio_encoder.parameters() if p.requires_grad], 
-            'lr': config.optim_args.lr / 10,
-            'weight_decay': config.optim_args.weight_decay
-        },
-        {
-            'params': [p for p in text_encoder[0].auto_model.parameters() if p.requires_grad], 
-            'lr': config.optim_args.lr / 10,
-            'weight_decay': config.optim_args.weight_decay
-        },
-        {
-            'params': [p for p in align_model.parameters() if p.requires_grad], 
-            'lr': config.optim_args.lr,
-            'weight_decay': 1e-4
-        }
-    ]
+    # text_encoder = SentenceTransformer("all-mpnet-base-v2", device="cuda")
+    # sentence_peft_config = {
+    #     'r': 16,
+    #     'lora_alpha': 16,
+    #     'lora_dropout': 0.1,
+    #     'bias': "none",
+    #     'task_type': "MPNetForMaskedLM",
+    #     'modules_to_save': [],
+    #     'target_modules': ["attn.q", "attn.k", "attn.v","attn.o","pooler.dense"]
+    # }
+    # peft_config = LoraConfig(**sentence_peft_config)
+    # text_encoder[0].auto_model = get_peft_model(text_encoder[0].auto_model, peft_config)
+    # text_encoder[0].auto_model.print_trainable_parameters() # Should be below 1%... otherwise, embed_token or lm_head saved
+    # combined_parameters = [
+    #     {
+    #         'params': [p for p in audio_encoder.parameters() if p.requires_grad], 
+    #         'lr': config.optim_args.lr / 10,
+    #         'weight_decay': config.optim_args.weight_decay
+    #     },
+    #     {
+    #         'params': [p for p in text_encoder[0].auto_model.parameters() if p.requires_grad], 
+    #         'lr': config.optim_args.lr / 10,
+    #         'weight_decay': config.optim_args.weight_decay
+    #     },
+    #     {
+    #         'params': [p for p in align_model.parameters() if p.requires_grad], 
+    #         'lr': config.optim_args.lr,
+    #         'weight_decay': 1e-4
+    #     }
+    # ]
     optimizer = optim.AdamW(
-        # align_model.parameters(),
-        combined_parameters,
+        align_model.parameters(),
         lr=config.optim_args.lr,
         betas=config.optim_args.betas,
         eps=config.optim_args.eps,
@@ -241,8 +247,7 @@ def main():
     for epoch in range(1, config.training.epochs + 1):  # 1~10
         train(
             align_model,
-            audio_encoder,
-            text_encoder,
+            clap_model,
             train_dataloader,
             optimizer,
             scheduler,
@@ -255,11 +260,11 @@ def main():
                 unwrapped_model.state_dict(),
                 os.path.join(config.training.output_path, f"epoch_{epoch}.pt"),
             )
-            torch.save(
-                audio_encoder.state_dict(),
-                os.path.join(config.training.output_path, "audio_encoder.bin"),
-            )
-            text_encoder[0].auto_model.save_pretrained(config.training.output_path)
+            # torch.save(
+            #     audio_encoder.state_dict(),
+            #     os.path.join(config.training.output_path, "audio_encoder.bin"),
+            # )
+            # text_encoder[0].auto_model.save_pretrained(config.training.output_path)
         accelerator.wait_for_everyone()
     accelerator.end_training()
 
