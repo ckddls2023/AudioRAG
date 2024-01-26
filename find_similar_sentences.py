@@ -51,6 +51,7 @@ def encode_texts(text_encoder, align_model, sentences, batch_size=1024):
         embeddings = []
         for i in tqdm(range(0, len(sentences), batch_size)):
             captions = sentences[i : i + batch_size]
+            # text_embed = text_encoder.encode_multi_process(captions, pool, normalize_embeddings=True, convert_to_tensor=True)
             text_embed = text_encoder.encode(
                 captions, normalize_embeddings=True, convert_to_tensor=True
             )

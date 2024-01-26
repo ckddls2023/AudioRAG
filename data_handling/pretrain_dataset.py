@@ -3,6 +3,7 @@ import random
 import librosa
 import soundfile as sf
 import torch
+import random
 import os
 import numpy as np
 from omegaconf import OmegaConf
@@ -23,7 +24,7 @@ def load_json_file(files, blacklist=None, train=True):
         parent_path = os.path.basename(os.path.dirname(file))  # Extracts the parent directory name
         with open(file, "r") as f:
             json_obj = json.load(f)
-            for i, item in enumerate(json_obj["data"][:500000]):
+            for i, item in enumerate(random.sample(json_obj["data"], min(len(json_obj["data"]),500000))):
                 item["embedding_path"] = f"./data/embeddings/{parent_path}/{i:07d}.npy"
                 if "FreeSound" in file and blacklist:
                     if item["id"] in blacklist["FreeSound"]:
@@ -106,8 +107,8 @@ class AudioLanguagePretrainDataset(Dataset):
         embedding_path = item["embedding_path"]
         # embedding = np.load(embedding_path)
         duration = item["duration"]
-        # audio_feature = self.preprocess_waveform(wav_path, duration, fuse=True) # Always not fuse it's feature
-        audio_feature = self.read_wav(wav_path) # Always not fuse it's feature
+        audio_feature = self.preprocess_waveform(wav_path, duration, fuse=True) # Always not fuse it's feature
+        # audio_feature = self.read_wav(wav_path) # Always not fuse it's feature
         caption = item["caption"]
         if self.train and isinstance(caption, list):
             caption = random.choice(item["caption"])
@@ -125,7 +126,7 @@ class AudioLanguagePretrainDataset(Dataset):
             #     other_key = random.choice([k for k in self.retrieve_map.keys() if k != wav_path])
             #     random_item = random.choice(self.retrieve_map[other_key])
             #     selected_items[i] = random_item
-            # retr_audio_features = [self.preprocess_waveform(retr_wav_path, duration) for (retr_wav_path, caption) in selected_items]
+            retr_audio_features = [self.preprocess_waveform(retr_wav_path, duration) for (retr_wav_path, caption) in selected_items]
             retr_audio_features = [self.read_wav(retr_wav_path) for (retr_wav_path, caption) in selected_items]
             retr_captions = [text_preprocess(caption) for (retr_wav_path, caption) in selected_items]
         return audio_feature, caption, wav_path, retr_audio_features, retr_captions, embedding_path

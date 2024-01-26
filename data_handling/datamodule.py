@@ -96,8 +96,8 @@ class AudioCaptionDataModule:
 
 def collate_fn(batch):
     audio_features, captions, audio_paths, retr_audio_features, retr_captions, embeddings = zip(*batch)
-    max_length = max([wav.shape[-1] for wav in audio_features])
-    audio_features = [np.pad(wav, pad_width=(0, max_length - wav.shape[-1]), mode='constant', constant_values=0.0) for wav in audio_features]
+    # max_length = max([wav.shape[-1] for wav in audio_features])
+    # audio_features = [np.pad(wav, pad_width=(0, max_length - wav.shape[-1]), mode='constant', constant_values=0.0) for wav in audio_features]
     if retr_audio_features[0]:
         retr_audio_features = list(map(list, zip(*retr_audio_features))) # B, top_k to top_k, B
         retr_captions = list(map(list, zip(*retr_captions)))

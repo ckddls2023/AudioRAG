@@ -7,11 +7,31 @@ import time
 import torch
 import json
 from torch.utils.data import Dataset
-from torch import optim
+from torch import optim, nn
 import wandb
 from omegaconf import OmegaConf
 from tqdm import tqdm
 from utils import setup_seed, AverageMeter, decode_output
+from accelerate.utils.deepspeed import (
+    DeepSpeedEngineWrapper,
+    DeepSpeedOptimizerWrapper,
+    DeepSpeedSchedulerWrapper,
+    DummyOptim,
+    DummyScheduler,
+)
+
+# Monkey patch efficient xformer attn
+# from llama_xformers_attn_monkey_patch import (
+#     replace_llama_attn_with_xformers_attn,
+# )
+# replace_llama_attn_with_xformers_attn()
+    
+# from llama_flash_attn_monkey_patch import replace_llama_attn_with_flash_attn
+# replace_llama_attn_with_flash_attn()
+
+# from llama2_flash_attn_monkey_patch import replace_llama_attn_with_flash_attn
+# replace_llama_attn_with_flash_attn()
+
 import transformers
 from data_handling.pretrain_dataset import pretrain_dataloader
 from accelerate import Accelerator, DistributedDataParallelKwargs, FullyShardedDataParallelPlugin
@@ -21,13 +41,7 @@ import evaluate
 from metrics import SpiceMetric, CocoTokenizer, CiderMetric
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictType, FullStateDictConfig
 
-warnings.simplefilter("ignore", UserWarning)
-# fsdp_plugin = FullyShardedDataParallelPlugin(
-#     state_dict_config=FullStateDictConfig(offload_to_cpu=True, rank0_only=True),
-# )
-ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True, static_graph=False)
-accelerator = Accelerator(gradient_accumulation_steps=8, log_with="wandb", kwargs_handlers=[ddp_kwargs], even_batches=True)
-
+accelerator = Accelerator(log_with="wandb")
 
 def get_config():
     parser = argparse.ArgumentParser(description="Generate Faiss index from PyTorch DataLoader")
@@ -47,7 +61,8 @@ def train(model, dataloader, optimizer, scheduler, epoch, max_grad=1.0):
         with accelerator.accumulate(model):
             optimizer.zero_grad()
             step = len(dataloader) * (epoch - 1) + batch_id
-            output = model(audio, caption, retr_audios=retr_audios, retr_captions=retr_captions)
+            with accelerator.autocast():
+                output = model(audio, caption, retr_audios=retr_audios, retr_captions=retr_captions)
             accelerator.backward(output["loss"])
             if accelerator.sync_gradients:
                 accelerator.clip_grad_norm_(model.parameters(), max_grad) # 1.0
@@ -117,6 +132,7 @@ def validate(data_loader, model, epoch):
 def main():
     # torch.autograd.set_detect_anomaly(True)
     config = get_config()
+    warnings.simplefilter("ignore", UserWarning)
     setup_seed(config.seed)
     exp_name = config.exp_name + "_" + config.model_args.align.model_name + f"_lr_{config.optim_args.lr}_seed_{config.seed}"
     accelerator.init_trackers(
@@ -124,23 +140,47 @@ def main():
         config=OmegaConf.to_container(config, resolve=True, throw_on_missing=True),
         init_kwargs={"wandb": {"name": exp_name}}
     )
-    model = SALMONN(
-        whisper_path = "/home/ckddls1321/.cache/checkpoints/whisper/",
-        beats_path = "/home/ckddls1321/.cache/checkpoints/beats/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt",
-        device = accelerator.device
-    )
-    accelerator.gradient_accumulation_steps = config.data_args.global_batch_size // (config.data_args.batch_size*accelerator.state.num_processes)
+    # model = SALMONN(
+    #     whisper_path = "/home/ckddls1321/.cache/checkpoints/whisper/",
+    #     beats_path = "/home/ckddls1321/.cache/checkpoints/beats/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt",
+    #     device = accelerator.device
+    # )
+    model = CLAP2LLAMA(config.model_args)
+    model.encoder.clap.model.audio_branch.spectrogram_extractor.stft.conv_real.weight = nn.Parameter(model.encoder.clap.model.audio_branch.spectrogram_extractor.stft.conv_real.weight.contiguous())
+    model.encoder.clap.model.audio_branch.spectrogram_extractor.stft.conv_imag.weight = nn.Parameter(model.encoder.clap.model.audio_branch.spectrogram_extractor.stft.conv_imag.weight.contiguous())
+    model.encoder.clap.model.audio_branch.logmel_extractor.melW = nn.Parameter(model.encoder.clap.model.audio_branch.logmel_extractor.melW.contiguous())
+    model.encoder.clap.model.audio_branch.spectrogram_extractor.stft.conv_real.weight.requires_grad = False
+    model.encoder.clap.model.audio_branch.spectrogram_extractor.stft.conv_imag.weight.requires_grad = False
+    model.encoder.clap.model.audio_branch.logmel_extractor.melW.requires_grad = False
+        
+    if accelerator.state.deepspeed_plugin is None:
+        accelerator.gradient_accumulation_steps = config.data_args.global_batch_size // (config.data_args.batch_size*accelerator.state.num_processes)
     if config.model_args.checkpoint_path:
         # accelerator.load_state(config.training.output_path) # FSDP
         model.load_ckpt(config.model_args.checkpoint_path)
     train_dataloader = pretrain_dataloader(config, subset="train_jsons", bucket=False, is_distributed=False,num_tasks=1,global_rank=0,shuffle=True,retrieve_map=config.index_args.index_path,top_k=config.index_args.top_k)
     val_dataloader = pretrain_dataloader(config, subset="val_jsons", bucket=False, is_distributed=False, num_tasks=1,global_rank=0,shuffle=False,retrieve_map=config.index_args.index_path,top_k=config.index_args.top_k)
-    optimizer = optim.AdamW(model.parameters(), lr=config.optim_args.lr, betas=config.optim_args.betas, eps=config.optim_args.eps, weight_decay=config.optim_args.weight_decay, fused=False)
+    optimizer_cls = (
+        torch.optim.AdamW
+        if accelerator.state.deepspeed_plugin is None
+        or "optimizer" not in accelerator.state.deepspeed_plugin.deepspeed_config
+        else DummyOptim
+    )
+    optimizer = optimizer_cls(model.parameters(), lr=config.optim_args.lr, betas=config.optim_args.betas, eps=config.optim_args.eps, weight_decay=config.optim_args.weight_decay)
     warmup_steps = int(len(train_dataloader)*config.training.warmup_epochs/accelerator.gradient_accumulation_steps)
     train_steps = int(len(train_dataloader)*config.training.epochs/accelerator.gradient_accumulation_steps)
-    scheduler = transformers.get_cosine_schedule_with_warmup(optimizer, warmup_steps, train_steps)
+    if (
+        accelerator.state.deepspeed_plugin is None
+        or "scheduler" not in accelerator.state.deepspeed_plugin.deepspeed_config
+    ):
+        scheduler = transformers.get_cosine_schedule_with_warmup(optimizer, warmup_steps, train_steps)
+    else:
+        scheduler = DummyScheduler(
+            optimizer, total_num_steps=train_steps, warmup_num_steps=warmup_steps
+        )
     train_dataloader, model, optimizer, scheduler = accelerator.prepare(train_dataloader, model, optimizer, scheduler)
     print(model)
+    print(f"Total iteration : {train_steps}")
     spiders = []
     save_ckpt = accelerator.is_main_process
     if accelerator.state.mixed_precision == "no": # Ampere, Hopper

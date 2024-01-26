@@ -1,11 +1,25 @@
 {
-    "fp16": {
-        "enabled": true,
-        "loss_scale": 0,
-        "loss_scale_window": 1000,
-        "initial_scale_power": 16,
-        "hysteresis": 2,
-        "min_loss_scale": 1
+    "bf16": {
+        "enabled": "auto"
+    },
+    "optimizer": {
+        "type": "AdamW",
+        "params": {
+            "lr": 1e-4,
+            "weight_decay": 1e-2, 
+            "torch_adam": true,
+            "adam_w_mode": true
+        }
+    },
+    "scheduler": {
+        "type": "WarmupCosineLR",
+        "params": {
+            "warmup_min_ratio": 0.01,
+            "cos_min_ratio": 1e-4,
+            "warmup_type": "linear",
+            "warmup_num_steps": 20000,
+            "total_num_steps": 374890
+        }
     },
     "zero_optimization": {
         "stage": 3,
@@ -23,14 +37,14 @@
         "stage3_prefetch_bucket_size": 1e9,
         "stage3_param_persistence_threshold": 1e8,
         "sub_group_size": 1e9,
-        "stage3_max_live_parameters": 10e9,
+        "stage3_max_live_parameters": 3e9,
         "stage3_max_reuse_distance": 3e9,
         "gather_16bit_weights_on_model_save": true
     },
     "gradient_accumulation_steps": 4,
     "gradient_clipping": "auto",
     "steps_per_print": 10,
-    "train_batch_size": 192,
-    "train_micro_batch_size_per_gpu": 12,
+    "train_batch_size": 256,
+    "train_micro_batch_size_per_gpu": 16,
     "wall_clock_breakdown": false
 }

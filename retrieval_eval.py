@@ -34,7 +34,7 @@ encoder_config = CLAPEncoderConfig.from_dict(encoder_config)
 audio_encoder = CLAPAudioTower(encoder_config)
 align_model = align2text(hidden_size=768, num_latents=64, num_layers=1)
 checkpoint_path =  "./retriever_models_lm_attn4/"
-align_model_ckpt = os.path.join(checkpoint_path, "epoch_14.pt")
+align_model_ckpt = os.path.join(checkpoint_path, "epoch_15.pt")
 sentence_peft_config = {
     'r': 16,
     'lora_alpha': 16,

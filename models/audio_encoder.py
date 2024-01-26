@@ -73,7 +73,7 @@ class CLAPAudioTower(PreTrainedModel):
     def __init__(self, config):
         super(CLAPAudioTower, self).__init__(config)
 
-        self.clap = CLAP_Module(enable_fusion=True)  # 615M
+        self.clap = CLAP_Module(enable_fusion=True, device=torch.cuda.current_device())  # 615M
         if config.pretrained:
             self.clap.load_ckpt()  # download the default pretrained checkpoint.
         if config.use_lora: # Replace qkv layer with LoRA
@@ -83,12 +83,11 @@ class CLAPAudioTower(PreTrainedModel):
                                       select_feature=self.config.select_feature,
                                       window_size=self.config.window_size,
                                       step_size=self.config.step_size):
-            device = next(self.parameters()).device
             input_dict = {}
             keys = data[0].keys()
             for k in keys:
-                input_dict[k] = torch.cat([d[k].unsqueeze(0) for d in data], dim=0).to(device)
-            audio_embeds = self.encode_audio(input_dict, device=device)
+                input_dict[k] = torch.cat([d[k].unsqueeze(0) for d in data], dim=0).to(torch.cuda.current_device())
+            audio_embeds = self.encode_audio(input_dict, device=torch.cuda.current_device())
             if select_feature == "fine_grained_embedding":
                 embeds = audio_embeds[select_feature] # [B,1024,768]
                 unfolded = embeds.unfold(1, window_size, step_size) # [B,1024/S,768,W]

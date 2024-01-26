@@ -373,6 +373,10 @@ class SALMONN(nn.Module):
         super().__init__()
         self.device = device
         
+        # Prompt 
+        self.retr_prompt = "USER: These are similar audio and caption pairs."
+        self.task_prompt = "Concisely describe this audio sound "
+        
         # Encoder
         self.feature_extractor = WhisperFeatureExtractor.from_pretrained(whisper_path)
         self.speech_encoder = WhisperModel.from_pretrained(whisper_path).encoder
@@ -390,15 +394,27 @@ class SALMONN(nn.Module):
         self.second_per_frame = second_per_frame
         self.second_stride = second_stride
         self.dtype = torch.bfloat16
-        
-        for name, p in self.beats.named_parameters():
-            p.requires_grad = False
-        for name, p in self.speech_encoder.named_parameters():
-            p.requires_grad = False
+        self.freeze_encoder = False
+        if self.freeze_encoder:
+            for name, p in self.beats.named_parameters():
+                p.requires_grad = False
+            for name, p in self.speech_encoder.named_parameters():
+                p.requires_grad = False
+        else:
+            self.encoder_peft_config = LoraConfig(
+                r=32, 
+                lora_alpha=64, 
+                target_modules=["q_proj", "v_proj"], 
+                lora_dropout=0.05, 
+                bias="none"
+            )
+            self.beats = get_peft_model(self.beats, self.encoder_peft_config)
+            self.speech_encoder = get_peft_model(self.speech_encoder, self.encoder_peft_config)
+
         
         # decoder
         # self.decoder = LlamaForCausalLM.from_pretrained("lmsys/vicuna-7b-v1.5")  # v1.5 : LLAMA2 + VICUNA
-        self.decoder = LlamaForCausalLM.from_pretrained("lmsys/vicuna-7b-v1.5")  # v1.5 : LLAMA2 + VICUNA
+        self.decoder = LlamaForCausalLM.from_pretrained("lmsys/vicuna-7b-v1.5", use_cache=False)  # v1.5 : LLAMA2 + VICUNA
         self.llama_tokenizer = LlamaTokenizer.from_pretrained("lmsys/vicuna-7b-v1.5", use_fast=False, add_eos_token=True,add_bos_token=False)
         num_new_tokens = self.llama_tokenizer.add_special_tokens({'pad_token': '[PAD]'})
         self.decoder.config.pad_token_id = self.llama_tokenizer.pad_token_id
@@ -438,6 +454,9 @@ class SALMONN(nn.Module):
         torch.save(self.decoder_proj.state_dict(), os.path.join(checkpoint_path,"decoder_proj.bin"))
         torch.save(self.ln_speech.state_dict(), os.path.join(checkpoint_path,"ln_speech.bin"))
         torch.save(self.ln_audio.state_dict(), os.path.join(checkpoint_path,"ln_audio.bin"))
+        if not self.freeze_encoder:
+            self.beats.save_pretrained(os.path.join(checkpoint_path, "beats/"))
+            self.speech_encoder.save_pretrained(os.path.join(checkpoint_path, "speech_encoder/"))
         if not self.freeze_lm:
             self.decoder.save_pretrained(checkpoint_path)
             
@@ -462,32 +481,31 @@ class SALMONN(nn.Module):
             return self.decoder.base_model.get_input_embeddings()
         
     def encode_audio(self, wav):
-        with torch.no_grad():
-            device = self.device
-            spectrogram = self.feature_extractor(wav, return_tensors="pt", sampling_rate=16000).input_features.to(device) # [1, 80, 3000]
-            with torch.autocast(device_type="cuda", dtype=self.dtype):
-                speech_embeds = self.speech_encoder(spectrogram, return_dict=True).last_hidden_state
-        
-            # beats
-            if isinstance(wav, list):
-                wav = np.vstack(wav)
-                raw_wav = torch.from_numpy(wav).to(speech_embeds.device)
-            else:
-                raw_wav = torch.from_numpy(wav).to(speech_embeds.device).unsqueeze(0)
-            audio_padding_mask = torch.zeros(raw_wav.shape, device=speech_embeds.device).bool()
-            with torch.autocast(device_type="cuda", dtype=self.dtype):
-                audio_embeds, _ = self.beats.extract_features(raw_wav, padding_mask=audio_padding_mask, feature_only=True)
+        device = self.device
+        spectrogram = self.feature_extractor(wav, return_tensors="pt", sampling_rate=16000).input_features.to(device) # [1, 80, 3000]
+        with torch.autocast(device_type="cuda", dtype=self.dtype):
+            speech_embeds = self.speech_encoder(spectrogram, return_dict=True).last_hidden_state
+    
+        # beats
+        if isinstance(wav, list):
+            wav = np.vstack(wav)
+            raw_wav = torch.from_numpy(wav).to(speech_embeds.device)
+        else:
+            raw_wav = torch.from_numpy(wav).to(speech_embeds.device).unsqueeze(0)
+        audio_padding_mask = torch.zeros(raw_wav.shape, device=speech_embeds.device).bool()
+        with torch.autocast(device_type="cuda"):
+            audio_embeds, _ = self.beats.extract_features(raw_wav, padding_mask=audio_padding_mask, feature_only=True)
 
-            # auditory embeds
-            with torch.autocast(device_type="cuda"):
-                speech_embeds = self.ln_speech(speech_embeds.float())
-                audio_embeds = self.ln_audio(audio_embeds.float())
-            audio_embeds = F.pad(audio_embeds, (0, 0, 0, speech_embeds.size(1) - audio_embeds.size(1)))
-            speech_embeds = torch.cat([speech_embeds, audio_embeds], dim=-1)
-            
-            # fold embeds # [B, 1500, 2048]
-            unfolded = speech_embeds.unfold(1, 15, 15) # [B,1024/S,768,W]
-            averaged_embeds = unfolded.mean(dim=-1) # [B,1024/S,768]
+        # auditory embeds
+        with torch.autocast(device_type="cuda"):
+            speech_embeds = self.ln_speech(speech_embeds.float())
+            audio_embeds = self.ln_audio(audio_embeds.float())
+        audio_embeds = F.pad(audio_embeds, (0, 0, 0, speech_embeds.size(1) - audio_embeds.size(1)))
+        speech_embeds = torch.cat([speech_embeds, audio_embeds], dim=-1)
+        
+        # fold embeds # [B, 1500, 2048]
+        unfolded = speech_embeds.unfold(1, 15, 15) # [B,1024/S,768,W]
+        averaged_embeds = unfolded.mean(dim=-1) # [B,1024/S,768]
         return averaged_embeds
     
     def insert_prompt(self, prompt, input_embeds, shifted_input_ids, shifted_attn_mask):
@@ -519,7 +537,7 @@ class SALMONN(nn.Module):
         input_embeds = torch.cat((audio_embed, input_embeds), dim=1)
         shifted_input_ids, shifted_attn_mask = self.shift_and_pad_input(input_ids, attn_mask, audio_embed.shape[1])
         # | instruction <- here| audio | prompt <- here | caption | 
-        input_embeds, shifted_input_ids, shifted_attn_mask = self.insert_prompt("Describe this audio sound ", input_embeds, shifted_input_ids, shifted_attn_mask)
+        input_embeds, shifted_input_ids, shifted_attn_mask = self.insert_prompt(self.task_prompt, input_embeds, shifted_input_ids, shifted_attn_mask)
         retr_nums = max(len(retr_audio_embeds), len(retr_captions))
         retr_nums = random.randint(0, retr_nums) # Randomly retreive
         for i in range(retr_nums): # Suppose we have only case ([],retr_captions), (retr_audio_embeds,[]), both pair with same length
@@ -535,7 +553,7 @@ class SALMONN(nn.Module):
                 retr_input_ids[:,:] = -100 # Ignore all embeds
                 shifted_input_ids = torch.cat((retr_input_ids, shifted_input_ids), dim=1)
                 shifted_attn_mask = torch.cat([shifted_attn_mask.new_ones(retr_audio_embeds[i].size()[:2]), shifted_attn_mask], dim=1)
-        # input_embeds, shifted_input_ids, shifted_attn_mask = self.insert_prompt(self.retr_prompt, input_embeds, shifted_input_ids, shifted_attn_mask)
+        input_embeds, shifted_input_ids, shifted_attn_mask = self.insert_prompt(self.retr_prompt, input_embeds, shifted_input_ids, shifted_attn_mask)
         bos_token_embed = self.get_decoder_embeddings()(torch.tensor([self.llama_tokenizer.bos_token_id]).to(input_embeds.device))
         bos_token_embed = bos_token_embed.repeat(input_embeds.shape[0], 1, 1)
         input_embeds = torch.cat((bos_token_embed, input_embeds), dim=1)
@@ -570,18 +588,20 @@ class SALMONN(nn.Module):
                 retr_audio_embed = self.encode_audio(retr_audio) 
                 retr_audio_embed_proj = self.decoder_proj(retr_audio_embed)
                 retr_audio_embeds.append(retr_audio_embed_proj)
-            input_embeds, _ , shifted_attn_mask = self.insert_prompt("Describe this audio sound ", input_embeds, None, shifted_attn_mask)
+            input_embeds, _ , shifted_attn_mask = self.insert_prompt(self.task_prompt, input_embeds, None, shifted_attn_mask)
             retr_nums = max(len(retr_audio_embeds), len(retr_captions))
             for i in range(retr_nums): # Suppose we have only case ([],retr_captions), (retr_audio_embeds,[]), both pair with same length
                 if retr_captions: 
                     retr_input_ids, retr_attn_mask = self.prepare_text_input(retr_captions[i], input_embeds.device, add_special_tokens=False)
                     input_embeds = torch.cat((self.get_decoder_embeddings()(retr_input_ids), input_embeds), dim=1) 
                     shifted_attn_mask = torch.cat((retr_attn_mask, shifted_attn_mask), dim=1)
+                    # input_embeds, _, shifted_attn_mask = self.insert_prompt(" This audio sound is ", input_embeds, None, shifted_attn_mask)
                 if retr_audio_embeds: 
                     input_embeds = torch.cat((retr_audio_embeds[i], input_embeds), dim=1) 
                     retr_attn_mask = shifted_attn_mask.new_ones(retr_audio_embeds[i].size()[:2]) # B, prefix
                     shifted_attn_mask = torch.cat((retr_attn_mask, shifted_attn_mask), dim=1)
-            # input_embeds, _, shifted_attn_mask = self.insert_prompt(self.retr_prompt, input_embeds, None, shifted_attn_mask)
+                    # input_embeds, _, shifted_attn_mask = self.insert_prompt("Audio: ", input_embeds, None, shifted_attn_mask)
+            input_embeds, _, shifted_attn_mask = self.insert_prompt(self.retr_prompt, input_embeds, None, shifted_attn_mask)
             bos_token_embed = self.get_decoder_embeddings()(torch.tensor([self.llama_tokenizer.bos_token_id]).to(input_embeds.device))
             bos_token_embed = bos_token_embed.repeat(input_embeds.shape[0], 1, 1)
             input_embeds = torch.cat((bos_token_embed, input_embeds), dim=1)
