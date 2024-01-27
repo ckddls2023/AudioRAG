@@ -5,6 +5,7 @@ import faiss
 import numpy as np
 import torch
 import librosa
+import laion_clap
 from tqdm import tqdm
 from omegaconf import OmegaConf
 import torch.nn.functional as F
@@ -92,6 +93,29 @@ def preprocess_audio_file(audio_path):
         require_grad=False,
     )
     return temp_dict
+
+def encode_audio2(clap_model, audio_paths, batch_size=256):
+    embeddings = []
+    with torch.no_grad():
+        for i in tqdm(range(0, len(audio_paths), batch_size)):
+            audio_batch = audio_paths[i : i + batch_size]
+            audio_embed = clap_model.get_audio_embedding_from_filelist(x=audio_batch)
+            embeddings.append(audio_embed)
+    torch.cuda.synchronize()
+    return np.vstack(embeddings)
+
+def encode_mixed(clap_model, align_model, audio_paths, sentences, batch_size=256):
+    embeddings = []
+    with torch.no_grad():
+        for i in tqdm(range(0, len(audio_paths), batch_size)):
+            captions = sentences[i : i + batch_size]
+            audio_batch = audio_paths[i : i + batch_size]
+            audio_embed = clap_model.get_audio_embedding_from_filelist(x=audio_batch,use_tensor=True)
+            text_embed = clap_model.get_text_embedding(captions,use_tensor=True)
+            mixed_embed = align_model(None, audio_embed, text_embed)
+            embeddings.append(mixed_embed.detach().to("cpu", non_blocking=True).numpy())
+    torch.cuda.synchronize()
+    return np.vstack(embeddings)
 
 
 def encode_audio(audio_encoder, align_model, audio_paths, batch_size=256):
@@ -206,21 +230,21 @@ if __name__ == "__main__":
     train_jsons = [
         "data/json_files/AudioSet/train.json",
         "data/json_files/Clotho/train.json",
-        "data/json_files/BBC_Sound_Effects/bbc_final.json",
-        "data/json_files/FreeSound/fsd_final.json",
-        "data/json_files/SoundBible/sb_final.json",
-        "data/json_files/Auto_ACD/train.json",
-        "data/json_files/MACS/val.json",
+        # "data/json_files/BBC_Sound_Effects/bbc_final.json",
+        # "data/json_files/FreeSound/fsd_final.json",
+        # "data/json_files/SoundBible/sb_final.json",
+        # "data/json_files/Auto_ACD/train.json",
+        # "data/json_files/MACS/val.json",
     ] # huge
 
     val_jsons = [
         "data/json_files/AudioSet/train.json",
         "data/json_files/Clotho/train.json",
-        "data/json_files/BBC_Sound_Effects/bbc_final.json",
-        "data/json_files/FreeSound/fsd_final.json",
-        "data/json_files/SoundBible/sb_final.json",
-        "data/json_files/Auto_ACD/train.json",
-        "data/json_files/MACS/val.json"
+        # "data/json_files/BBC_Sound_Effects/bbc_final.json",
+        # "data/json_files/FreeSound/fsd_final.json",
+        # "data/json_files/SoundBible/sb_final.json",
+        # "data/json_files/Auto_ACD/train.json",
+        # "data/json_files/MACS/val.json"
         # "data/json_files/AudioSet/val.json",
         # "data/json_files/Clotho/val.json",
         # "data/json_files/Auto_ACD/val.json",
@@ -241,6 +265,24 @@ if __name__ == "__main__":
                 else:
                     train_sentences.append(entry["caption"])
                     train_audio_paths.append(entry["audio"])
+                    
+    val_sentences = []
+    val_audio_paths = []
+    sentence_counts = []
+    for val_json in val_jsons:
+        with open(val_json, "r") as file:
+            val_data = json.load(file)
+            for entry in val_data["data"]:
+                if entry["duration"] > 40 or entry["duration"] < 5:
+                    continue  # Skip it
+                if val_data["num_captions_per_audio"] > 1:
+                    val_sentences.extend(entry["caption"])
+                    val_audio_paths.append(entry["audio"])
+                    sentence_counts.append(len(entry["caption"]))
+                else:
+                    val_sentences.append(entry["caption"])
+                    val_audio_paths.append(entry["audio"])
+                    sentence_counts.append(1)
 
     # AudioCaps
     # val_audio_embed_file_path         = "./data/index/final_atc_lm_attn/val_caps_clotho_audio_embed.npy"
@@ -305,47 +347,40 @@ if __name__ == "__main__":
     #     np.save(train_audio_encoder_embed_file_path, train_audio_encoder_embed)
     #     np.save(train_audio_cls_attn_file_path, train_audio_cls_attn)
     
-    result_path = "./data/index/text2text/"
-    train_text_index_file_path = "/home/ckddls1321/.cache/data/train_sentence_text_embed_hugeKB.bin"
-    train_text_embedding_file_path  = "/home/ckddls1321/.cache/data/train_text_embed_huge.npy" # This is for audio features [B, 256, 768]
-    if os.path.exists(train_text_index_file_path):
+    
+    # Mixed Embedding
+    device = torch.device('cuda:0')
+    clap_model = laion_clap.CLAP_Module(enable_fusion=False, amodel='HTSAT-base')
+    clap_model.load_ckpt("/home/ckddls1321/.cache/checkpoints/music_speech_audioset_epoch_15_esc_89.98.pt")
+    clap_model = clap_model.to(device)
+    clap_model.eval()
+    align_model = align2text(top_k=2) # new version
+    align_model_ckpt = os.path.join("./retriever_models_t2t","epoch_15.pt")
+    if os.path.exists(align_model_ckpt):
+        print("===Reload Audio-Text alignment network===")
+        align_model.load_state_dict(torch.load(align_model_ckpt), strict=False)
+    align_model = align_model.to(device)
+    align_model.eval()
+    result_path = "./data/index/audio2mixed/"
+    train_mixed_index_file_path = "/home/ckddls1321/.cache/data/train_sentence_mixed_embed_baseKB.bin"
+    train_mixed_embedding_file_path  = "/home/ckddls1321/.cache/data/train_mixed_embed_base.npy" # This is for audio features [B, 256, 768]
+    if os.path.exists(train_mixed_index_file_path):
         text_index = faiss.read_index(train_text_index_file_path)
     else:
-        train_text_embeddings = encode_texts(text_encoder, train_sentences, pool)
-        text_index = faiss.IndexFlatIP(train_text_embeddings.shape[1])
-        text_index.add(train_text_embeddings)
-        faiss.write_index(text_index, train_text_index_file_path)
-        np.save(train_text_embedding_file_path, train_text_embeddings)
-
-    val_sentences = []
-    val_audio_paths = []
-    sentence_counts = []
-    for val_json in val_jsons:
-        with open(val_json, "r") as file:
-            val_data = json.load(file)
-            for entry in val_data["data"]:
-                if entry["duration"] > 40 or entry["duration"] < 5:
-                    continue  # Skip it
-                if val_data["num_captions_per_audio"] > 1:
-                    val_sentences.extend(entry["caption"])
-                    val_audio_paths.append(entry["audio"])
-                    sentence_counts.append(len(entry["caption"]))
-                else:
-                    val_sentences.append(entry["caption"])
-                    val_audio_paths.append(entry["audio"])
-                    sentence_counts.append(1)
-
-    # If we use sentence embedding
-    val_embeddings = encode_texts(text_encoder, val_sentences, pool)
-    averaged_val_embeddings = average_dynamic_embeddings(
-        val_embeddings, sentence_counts
-    )
+        train_mixed_embeddings = encode_mixed(clap_model, align_model, train_audio_paths, train_sentences)
+        mixed_index = faiss.IndexFlatIP(train_mixed_embeddings.shape[1])
+        mixed_index.add(train_mixed_embeddings)
+        faiss.write_index(mixed_index, train_mixed_index_file_path)
+        np.save(train_mixed_embedding_file_path, train_mixed_embeddings)
+        
+    val_embeddings = encode_audio2(clap_model, val_audio_paths)
     print(f"Total audio paths in train jsons : {len(train_audio_paths)}")
     print(f"Total averaged train embeddings : {text_index.ntotal}")
     print(f"Total audio paths in validation jsons : {len(val_audio_paths)}")
     print(f"Total averaged val embeddings : {averaged_val_embeddings.shape[0]}")
+    
     k = 5  # Number of nearest neighbors to find
-    D, I = text_index.search(averaged_val_embeddings, k)
+    D, I = mixed_index.search(val_embeddings, k)
     results = {}
     for val_idx, neighbors in enumerate(I):
         val_audio = val_audio_paths[val_idx]
@@ -355,8 +390,44 @@ if __name__ == "__main__":
             train_caption = train_sentences[neighbor_idx]
             similar_pairs.append([train_audio, train_caption])
         results[val_audio] = similar_pairs
-    with open(os.path.join(result_path, "text2text_huge.json"), "w") as outfile:
+    with open(os.path.join(result_path, "audio2mixed_base.json"), "w") as outfile:
         json.dump(results, outfile, indent=4)
+    
+    
+    # Sentence Embedding
+    # result_path = "./data/index/text2text/"
+    # train_text_index_file_path = "/home/ckddls1321/.cache/data/train_sentence_text_embed_largeKB.bin"
+    # train_text_embedding_file_path  = "/home/ckddls1321/.cache/data/train_text_embed_large.npy" # This is for audio features [B, 256, 768]
+    # if os.path.exists(train_text_index_file_path):
+    #     text_index = faiss.read_index(train_text_index_file_path)
+    # else:
+    #     train_text_embeddings = encode_texts(text_encoder, train_sentences, pool)
+    #     text_index = faiss.IndexFlatIP(train_text_embeddings.shape[1])
+    #     text_index.add(train_text_embeddings)
+    #     faiss.write_index(text_index, train_text_index_file_path)
+    #     np.save(train_text_embedding_file_path, train_text_embeddings)
+
+    # val_embeddings = encode_texts(text_encoder, val_sentences, pool)
+    # averaged_val_embeddings = average_dynamic_embeddings(
+    #     val_embeddings, sentence_counts
+    # )
+    # print(f"Total audio paths in train jsons : {len(train_audio_paths)}")
+    # print(f"Total averaged train embeddings : {text_index.ntotal}")
+    # print(f"Total audio paths in validation jsons : {len(val_audio_paths)}")
+    # print(f"Total averaged val embeddings : {averaged_val_embeddings.shape[0]}")
+    # k = 5  # Number of nearest neighbors to find
+    # D, I = text_index.search(averaged_val_embeddings, k)
+    # results = {}
+    # for val_idx, neighbors in enumerate(I):
+    #     val_audio = val_audio_paths[val_idx]
+    #     similar_pairs = []
+    #     for neighbor_idx in neighbors:
+    #         train_audio = train_audio_paths[neighbor_idx]
+    #         train_caption = train_sentences[neighbor_idx]
+    #         similar_pairs.append([train_audio, train_caption])
+    #     results[val_audio] = similar_pairs
+    # with open(os.path.join(result_path, "text2text_large.json"), "w") as outfile:
+    #     json.dump(results, outfile, indent=4)
 
     # Use ATC embedding
     # if os.path.exists(val_audio_embed_file_path):

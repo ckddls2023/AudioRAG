@@ -118,15 +118,15 @@ def main():
     )
     config.optim_args.lr = 5e-4 # Language Bind 5e-4, LiT 1e-3 -> 5e-5 -> 1e-5
     config.optim_args.weight_decay = 0.01 # Language Bind 0.2, LiT 1e-4
-    config.index_args.index_path = "./data/index/text2text/text2text_base.json"
+    config.index_args.index_path = "./data/index/text2text/text2text_large.json"
     config.index_args.top_k = 2
     config.training.epochs = 15 # 0.7 * 15 = 10.5M + 1.3M * 10 + 2M * 10
     config.train_jsons = [
         "data/json_files/AudioSet/train.json",
         "data/json_files/Clotho/train.json",
-        # "data/json_files/BBC_Sound_Effects/bbc_final.json",
-        # "data/json_files/FreeSound/fsd_final.json",
-        # "data/json_files/SoundBible/sb_final.json",
+        "data/json_files/BBC_Sound_Effects/bbc_final.json",
+        "data/json_files/FreeSound/fsd_final.json",
+        "data/json_files/SoundBible/sb_final.json",
         # "data/json_files/Auto_ACD/train.json",
         # "data/json_files/MACS/val.json",
     ]
@@ -137,7 +137,7 @@ def main():
     clap_model.eval()
     config.data_args.global_batch_size = 1024 # 1024 Global batch size
     config.data_args.batch_size = 32  # 1024 Global batch size
-    config.training.output_path = "./retriever_models_t2t/"
+    config.training.output_path = "./retriever_models_t2t_large/"
     config.model_args.encoder.use_lora = True
     config.model_args.checkpoint_path = (
         "./pretrained_models/pretrained_MLP_clap_lora_AutoACD/"

@@ -14,6 +14,9 @@ class align2text(nn.Module):
         self.audio_w = nn.Parameter(torch.zeros(1))
         self.text_w = nn.Parameter(torch.zeros(1))
         self.projection = nn.Linear(512, 512, bias=False)
+        # identity_matrix = torch.eye(512, 512)
+        # with torch.no_grad():
+        #     self.projection.weight.copy_(identity_matrix)
         self.top_k = top_k
         
     def forward(self, audio_embed, retr_audio_embed, retr_text_embed):
@@ -24,9 +27,9 @@ class align2text(nn.Module):
             audio_embed = F.normalize(audio_embed, dim=-1, p=2)
             audio_embed = audio_embed.view(audio_embed.shape[0], 1, -1).expand(-1, self.top_k, -1) # B,2,512
             mixed_embed = mixed_embed.view(audio_embed.shape[0], self.top_k, -1)
-            loss = 2 - 2 * (mixed_embed * audio_embed).sum(dim=-1)
+            loss = 2 - (mixed_embed * audio_embed).sum(dim=-1).sum(dim=-1)
             return {
-                "loss": loss
+                "loss": loss.mean()
             }
         else:
             mixed_embed = torch.sigmoid(self.audio_w) * retr_audio_embed + torch.sigmoid(self.text_w) * retr_text_embed
